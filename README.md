@@ -1,21 +1,37 @@
-# Warden
+<p align="center">
+  <img src="assets/logo.png" width="72" height="72" alt="Warden logo">
+</p>
 
-Static security analysis tool for Windows thick-client applications — secrets
-exposure, insecure configuration, DLL hijacking risk, code-signing verification,
-and reverse-engineering exposure.
+<h1 align="center">Warden</h1>
+
+<p align="center">
+Static security analysis for Windows thick-client applications.
+</p>
+
+---
+
+Warden scans an extracted Windows thick-client application (or a single
+`.exe`/`.dll`) for hardcoded secrets, insecure configuration, DLL hijacking
+risk, code-signing/integrity issues, and reverse-engineering exposure —
+purely through static analysis, with a self-contained HTML report as output.
 
 Built for use during authorized VAPT / thick-client assessment engagements.
 
 ## Status
 
-**Module 1 — Secrets & Config Exposure Scanner: implemented.**
-**Module 2 — DLL Hijacking Detection: implemented.**
-**Module 3 — Signature / Integrity Check: implemented.**
-**Module 4 — Reverse Engineering / Anti-Tamper Exposure: implemented.**
-**Desktop GUI: implemented.** Every finding across all four modules
-includes a detailed **Proof of Concept / Reproduction Steps** section with
-concrete commands. All four core modules from the original spec are now
-built.
+All four core modules are implemented, along with a desktop GUI:
+
+| Module | What it covers | Status |
+|---|---|---|
+| 1 — Secrets & Config Exposure | Hardcoded credentials, entropy-based secret detection, embedded PE strings, local DB files | ✅ Implemented |
+| 2 — DLL Hijacking Detection | Search-order exposure, phantom DLL imports, writable install dirs, unquoted service paths | ✅ Implemented |
+| 3 — Signature / Integrity Check | Authenticode presence, expired/self-signed/weak-hash certs, publisher consistency, `osslsigncode` digest checks | ✅ Implemented |
+| 4 — RE / Anti-Tamper Exposure | ASLR/DEP/SafeSEH/CFG, packer detection, .NET obfuscation gaps, PDB path leakage | ✅ Implemented |
+| Desktop GUI | Folder/file picker, module & option toggles, live progress + log, auto-opens the report | ✅ Implemented |
+
+Every finding across all four modules includes a detailed **Proof of
+Concept / Reproduction Steps** section with concrete commands, so reports
+read like an assessment deliverable rather than a bare tool dump.
 
 ## Module 1 — What it does
 
@@ -33,7 +49,7 @@ built.
 - Deduplicates findings by content fingerprint and tags low-confidence /
   placeholder-looking matches (e.g. `changeme`, `example`) so reports stay
   usable instead of drowning in noise.
-- Outputs a dark ops-console styled HTML report (self-contained, no external
+- Outputs a dark, minimal-themed HTML report (self-contained, no external
   assets) with unified Critical/High/Medium/Low/Info severity scoring, plus
   optional raw JSON for tooling integration.
 
@@ -105,11 +121,27 @@ module identifies *exposure*, not exploitation.
   `IsDebuggerPresent`/`CheckRemoteDebuggerPresent`/etc. references, as a
   maturity signal, not a vulnerability.
 
-## Usage
+## Installation
 
 ```bash
+git clone https://github.com/Ankesh-Prajapati/Warden
+cd warden
 pip install -r requirements.txt
+```
 
+Python 3.10+ recommended. Tkinter (for the GUI) ships with the standard
+python.org Windows installer by default; on Linux, install your distro's
+`python3-tk` package if it's not already present.
+
+> **Optional system dependency**: Module 3's deeper digest verification uses
+> `osslsigncode` if it's installed (`apt install osslsigncode` on
+> Debian/Ubuntu/Kali). Without it, Module 3 still runs full structural
+> certificate checks — you just won't get the digest-mismatch/tampering
+> check, and can pass `--no-osslsigncode` to skip the attempt explicitly.
+
+## Usage (CLI)
+
+```bash
 # All four implemented modules
 python cli.py scan /path/to/extracted/app \
     --module secrets --module dll_hijack --module signature --module re_exposure \
@@ -124,37 +156,55 @@ python cli.py scan /path/to/extracted/app --module signature --no-osslsigncode
 python cli.py scan /path/to/extracted/app --output report.html
 ```
 
-> **Optional system dependency**: Module 3's deeper digest verification uses
-> `osslsigncode` if it's installed (`apt install osslsigncode` on
-> Debian/Ubuntu/Kali). Without it, Module 3 still runs full structural
-> certificate checks — you just won't get the digest-mismatch/tampering
-> check, and can pass `--no-osslsigncode` to skip the attempt explicitly.
-
 ## Desktop GUI
 
-For analysts who'd rather not use the CLI: `python gui.py` opens a desktop
-window where you can:
+For analysts who'd rather not use the CLI:
+
+```bash
+python gui.py
+```
 
 1. Select a target folder (recommended) or a single `.exe`/`.dll`.
-2. Tick which modules to run (Modules 1-4, all implemented) and any options
-   (entropy detection, PE string scanning, osslsigncode use, an optional
+2. Tick which modules to run (Modules 1–4, all implemented) and any options
+   (entropy detection, PE string scanning, `osslsigncode` use, an optional
    services-file for Module 2).
 3. Click **Run Scan** — progress and a live log stream in the window.
 4. The generated HTML report opens automatically in your browser when the
    scan finishes; a JSON export is written alongside it in the chosen
    output folder.
 
-```bash
-python gui.py
+The GUI has no extra dependencies beyond `requirements.txt` plus Tkinter.
+
+## Building a standalone Windows .exe
+
+To share Warden with people who don't have Python installed, package it
+with [PyInstaller](https://pyinstaller.org/):
+
+```powershell
+pip install -r requirements.txt
+pip install pyinstaller
+
+pyinstaller --onefile --windowed --name Warden --icon assets\logo.ico ^
+    --add-data "rules;rules" --add-data "assets;assets" gui.py
 ```
 
-Requires the same dependencies as the CLI (`pip install -r requirements.txt`)
-plus Tkinter, which ships with the standard python.org Windows installer by
-default (no extra install needed on Windows).
+- `--onefile` bundles the interpreter, Tkinter, and every dependency
+  (`pefile`, `PyYAML`, `click`, `rich`, `cryptography`) into a single
+  `Warden.exe`.
+- `--windowed` suppresses the console window.
+- `--add-data "rules;rules"` and `--add-data "assets;assets"` are **required**
+  — the app loads its YAML rule packs and logo relative to its own install
+  location at runtime, and PyInstaller only bundles Python code by default.
+
+The finished executable is `dist\Warden.exe` — that single file is what you
+hand out; no install or Python runtime needed on the recipient's machine.
+It is not code-signed, so Windows SmartScreen will show an "unrecognized
+app" warning on first run for recipients outside your team, until/unless
+you sign it with your own certificate.
 
 ## Proof of Concept in reports
 
-Every finding — across all three modules — now includes a **Proof of
+Every finding — across all four modules — includes a **Proof of
 Concept / Reproduction Steps** section in addition to Evidence/Description/
 Remediation, with concrete commands to independently reproduce the finding:
 `icacls`/`Get-AuthenticodeSignature` invocations for signature and
@@ -182,34 +232,39 @@ are skipped with a warning.
 ## Architecture
 
 ```
-secretsentry/
+warden/
+├── assets/
+│   ├── logo.png                # app header / taskbar mark
+│   ├── logo.ico                # multi-res icon for the packaged .exe
+│   └── logo_report.png         # logo embedded (base64) into HTML reports
 ├── core/
-│   ├── scanner.py             # orchestrator — merges module output
-│   ├── secrets_module.py      # Module 1 (implemented)
-│   ├── dll_hijack_module.py   # Module 2 (implemented)
-│   ├── signature_module.py    # Module 3 (implemented)
-│   ├── re_exposure_module.py  # Module 4 (implemented)
-│   ├── models.py              # Finding / Severity / ScanMetadata schema
-│   ├── rules.py                # YAML rule pack loader (secrets)
-│   ├── entropy.py              # Shannon entropy scoring
-│   ├── pe_utils.py             # shared PE parsing (pefile wrapper)
-│   └── fs_walk.py              # file walking, extension filtering, perms
+│   ├── scanner.py               # orchestrator — merges module output
+│   ├── secrets_module.py        # Module 1
+│   ├── dll_hijack_module.py     # Module 2
+│   ├── signature_module.py      # Module 3
+│   ├── re_exposure_module.py    # Module 4
+│   ├── models.py                # Finding / Severity / ScanMetadata schema
+│   ├── rules.py                 # YAML rule pack loader (secrets)
+│   ├── entropy.py               # Shannon entropy scoring
+│   ├── pe_utils.py              # shared PE parsing (pefile wrapper)
+│   └── fs_walk.py               # file walking, extension filtering, perms
 ├── rules/
 │   ├── secrets_patterns.yaml
-│   ├── system_dlls.yaml       # known Windows system DLLs (Module 2)
-│   └── packer_signatures.yaml # packer sections + .NET obfuscator markers (Module 4)
+│   ├── system_dlls.yaml         # known Windows system DLLs (Module 2)
+│   └── packer_signatures.yaml   # packer sections + .NET obfuscator markers (Module 4)
 ├── report/
-│   └── html_export.py
-├── cli.py
+│   └── html_export.py           # self-contained HTML report generator
+├── cli.py                       # CLI entry point
+├── gui.py                       # Tkinter desktop GUI
+├── requirements.txt
 └── README.md
 ```
 
 `core/pe_utils.py` and `core/fs_walk.py` are intentionally shared, generic
-modules — Module 2 (DLL hijacking) and Module 4 (RE exposure) will reuse the
-same PE parsing (`parse_pe`) and file-walking helpers rather than duplicating
-them.
+modules — Modules 2 and 4 reuse the same PE parsing (`parse_pe`) and
+file-walking helpers rather than duplicating them.
 
-## Known limitations (v1 / Module 1)
+## Known limitations (Module 1)
 
 - **ACL inspection**: on non-Windows hosts (the typical case — this tool
   usually runs on the analyst's Linux/Kali workstation against an extracted
@@ -257,8 +312,7 @@ them.
   mismatch, to avoid double-flagging every self-signed certificate as both
   `self-signed-certificate` and a separate Critical failure. If you need
   the raw `osslsigncode` output for a binary, it's available in the JSON
-  export path (not currently surfaced in the HTML report to keep it
-  readable — happy to add if useful).
+  export path.
 - **The auto-update heuristic is intentionally conservative and noisy-safe**:
   it only looks at import presence, not whether a verification API is
   actually called on the update-download code path. Treat it as a lead for
