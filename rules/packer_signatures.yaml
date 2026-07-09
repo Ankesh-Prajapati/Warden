@@ -1,0 +1,37 @@
+# Warden — Packer / Obfuscator Signature Reference
+#
+# Used by Module 4 (RE/Anti-Tamper Exposure) to identify likely packed or
+# obfuscated binaries via known section names and embedded marker strings.
+# This is a signature-based heuristic, not a definitive unpacker/deobfuscator
+# — false negatives (novel/custom packers) are expected and noted as a
+# limitation in the README.
+
+packer_section_names:
+  - UPX0
+  - UPX1
+  - UPX2
+  - .aspack
+  - .adata
+  - .themida
+  - .vmp0
+  - .vmp1
+  - .vmp2
+  - .enigma1
+  - .enigma2
+  - .petite
+  - .mpress
+  - .mpress1
+  - .nspack
+
+dotnet_obfuscator_markers:
+  - ConfusedBy
+  - ConfuserEx
+  - Eazfuscator
+  - "SmartAssembly"
+  - Dotfuscator
+  - "Agile.NET"
+  - Babel Obfuscator
+  - Crypto Obfuscator
+  - .NET Reactor
+  - Skater .NET
+  - Spices.Net

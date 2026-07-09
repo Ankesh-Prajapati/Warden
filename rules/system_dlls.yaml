@@ -1,0 +1,109 @@
+# Warden — Known Windows System DLL Reference
+#
+# Used by Module 2 (DLL Hijacking Detection) to distinguish imports that
+# would normally resolve from a real Windows System32 directory (safe,
+# not plantable by a local attacker) from imports that resolve to
+# neither System32 nor the application's own directory — a strong
+# signal of a missing/phantom DLL that could be planted for hijacking.
+#
+# This list is intentionally conservative (common, well-known system
+# DLLs across modern Windows versions). It is not exhaustive; unusual
+# but legitimate system DLLs may be flagged as "unknown" rather than
+# confidently "system" or "phantom" — see confidence handling in
+# dll_hijack_module.py.
+
+known_system_dlls:
+  - kernel32.dll
+  - kernelbase.dll
+  - user32.dll
+  - gdi32.dll
+  - gdiplus.dll
+  - advapi32.dll
+  - shell32.dll
+  - shlwapi.dll
+  - ole32.dll
+  - oleaut32.dll
+  - comctl32.dll
+  - comdlg32.dll
+  - ws2_32.dll
+  - wsock32.dll
+  - winhttp.dll
+  - wininet.dll
+  - crypt32.dll
+  - cryptsp.dll
+  - bcrypt.dll
+  - ncrypt.dll
+  - secur32.dll
+  - sspicli.dll
+  - ntdll.dll
+  - msvcrt.dll
+  - msvcp140.dll
+  - vcruntime140.dll
+  - vcruntime140_1.dll
+  - ucrtbase.dll
+  - api-ms-win-crt-runtime-l1-1-0.dll
+  - api-ms-win-crt-heap-l1-1-0.dll
+  - api-ms-win-crt-string-l1-1-0.dll
+  - api-ms-win-crt-stdio-l1-1-0.dll
+  - api-ms-win-core-synch-l1-2-0.dll
+  - setupapi.dll
+  - winmm.dll
+  - winspool.drv
+  - version.dll
+  - psapi.dll
+  - dbghelp.dll
+  - imagehlp.dll
+  - rpcrt4.dll
+  - netapi32.dll
+  - userenv.dll
+  - wtsapi32.dll
+  - iphlpapi.dll
+  - dnsapi.dll
+  - mswsock.dll
+  - dwmapi.dll
+  - uxtheme.dll
+  - propsys.dll
+  - shcore.dll
+  - windowscodecs.dll
+  - d3d9.dll
+  - d3d11.dll
+  - dxgi.dll
+  - oleacc.dll
+  - msimg32.dll
+  - imm32.dll
+  - clbcatq.dll
+  - normaliz.dll
+  - wldap32.dll
+  - credui.dll
+  - cabinet.dll
+  - urlmon.dll
+  - mpr.dll
+  - avicap32.dll
+  - avifil32.dll
+  - odbc32.dll
+  - odbccp32.dll
+  - oledlg.dll
+  - ntmarta.dll
+  - authz.dll
+  - bcryptprimitives.dll
+  - profapi.dll
+  - powrprof.dll
+  - webio.dll
+  - ncryptsslp.dll
+  - schannel.dll
+  - rasapi32.dll
+  - rasdlg.dll
+  - activeds.dll
+  - adsldpc.dll
+  - hid.dll
+  - setupapi.dll
+  - cfgmgr32.dll
+  - devobj.dll
+  - msvcp120.dll
+  - msvcr120.dll
+  - msvcp100.dll
+  - msvcr100.dll
+  - msvcp90.dll
+  - msvcr90.dll
+  - mfc140.dll
+  - mfc140u.dll

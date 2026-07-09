@@ -1,0 +1,5 @@
+pefile>=2024.8.26
+PyYAML>=6.0
+click>=8.1
+rich>=13.0
+cryptography>=42.0
