@@ -40,6 +40,32 @@ def _looks_like_placeholder(evidence: str) -> bool:
     return any(marker in lowered for marker in PLACEHOLDER_MARKERS)
 
 
+def _extract_context(lines: list[str], line_no: int, radius: int = 2, max_line_len: int = 200) -> str:
+    """
+    Build a numbered, multi-line code-context snippet around `line_no`
+    (1-indexed) so an analyst can pinpoint the finding in the actual file
+    without re-opening it — the matched line plus `radius` lines of
+    surrounding context above and below, each capped in width so a single
+    minified/huge line doesn't blow out the report.
+
+    This is the difference between an evidence value like just
+    "AKIAABCD1234EXAMPLE" and something an analyst can actually act on.
+    """
+    if not lines:
+        return ""
+    start = max(1, line_no - radius)
+    end = min(len(lines), line_no + radius)
+    width = len(str(end))
+    out = []
+    for i in range(start, end + 1):
+        raw = lines[i - 1]
+        if len(raw) > max_line_len:
+            raw = raw[:max_line_len] + " …(truncated)"
+        marker = ">>" if i == line_no else "  "
+        out.append(f"{marker} {str(i).rjust(width)} | {raw}")
+    return "\n".join(out)
+
+
 def _confidence_for(evidence: str, base: str = "Medium") -> str:
     if _looks_like_placeholder(evidence):
         return "Low"
@@ -160,6 +186,7 @@ def _scan_text_content(
                     line_number=line_no,
                     tags=rule.tags,
                     confidence=_confidence_for(evidence_raw),
+                    extra={"context": _extract_context(lines, line_no)},
                 )
             )
 
@@ -167,8 +194,11 @@ def _scan_text_content(
     if enable_entropy:
         for candidate, offset in find_high_entropy_candidates(content):
             # Skip candidates already captured by a regex rule to avoid duplicate
-            # noise for the same underlying string.
-            if any(candidate == f.evidence for f in findings):
+            # noise for the same underlying string — substring-based, not just
+            # exact-match, since a regex rule often captures the whole
+            # "key=VALUE" assignment while the entropy scanner isolates just
+            # the VALUE token (or vice versa), which is still the same secret.
+            if any(candidate in f.evidence or f.evidence in candidate for f in findings):
                 continue
             line_no = content.count("\n", 0, offset) + 1
             findings.append(
@@ -193,6 +223,7 @@ def _scan_text_content(
                     tags=["entropy", "generic"],
                     confidence="Low",  # entropy hits are inherently noisier
                     poc=_build_entropy_poc(file_path, line_no, candidate),
+                    extra={"context": _extract_context(lines, line_no)},
                 )
             )
 
@@ -289,6 +320,7 @@ def run(
     rules_dir: str | Path | None = None,
     enable_entropy: bool = True,
     scan_pe_strings: bool = True,
+    single_file: str | Path | None = None,
     progress_callback=None,
 ) -> list[Finding]:
     """
@@ -300,10 +332,13 @@ def run(
         rules_dir: optional override directory for YAML rule packs.
         enable_entropy: toggle entropy-based catch-all detection.
         scan_pe_strings: toggle embedded-string scanning of .exe/.dll files.
+        single_file: if given, restrict the scan to exactly this one file
+            instead of walking target_dir.
         progress_callback: optional callable(file_path: str) invoked per file,
             for CLI progress reporting.
     """
     target_dir = Path(target_dir)
+    single_file = Path(single_file) if single_file else None
     rules = load_rules(Path(rules_dir) if rules_dir else None)
 
     all_findings: list[Finding] = []
@@ -316,7 +351,7 @@ def run(
                 seen_fingerprints.add(fp)
                 all_findings.append(f)
 
-    for path in iter_target_files(target_dir):
+    for path in iter_target_files(target_dir, single_file=single_file):
         if progress_callback:
             progress_callback(str(path))
 

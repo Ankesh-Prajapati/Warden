@@ -60,6 +60,7 @@ def run_scan(
     scan_pe_strings: bool = True,
     services_file: str | Path | None = None,
     use_osslsigncode: bool = True,
+    single_file: str | Path | None = None,
     progress_callback=None,
     error_callback=None,
 ) -> ScanResult:
@@ -68,6 +69,10 @@ def run_scan(
 
     modules: list of module names to run. Currently supported: ["secrets"].
              Defaults to all currently-implemented modules.
+    single_file: if given, every module is restricted to analyzing exactly
+        this one file (target_dir is still used as directory context, e.g.
+        for sibling-DLL inventory in Module 2) instead of walking the whole
+        target_dir tree. This is what a "select a single EXE" scan maps to.
     """
     if modules is None:
         modules = ["secrets"]
@@ -76,7 +81,11 @@ def run_scan(
     if not target_dir.exists():
         raise FileNotFoundError(f"Target path does not exist: {target_dir}")
 
-    metadata = ScanMetadata(target_path=str(target_dir))
+    single_file = Path(single_file) if single_file else None
+    if single_file is not None and not single_file.is_file():
+        raise FileNotFoundError(f"single_file target does not exist or is not a file: {single_file}")
+
+    metadata = ScanMetadata(target_path=str(single_file) if single_file else str(target_dir))
     all_findings: list[Finding] = []
     files_scanned = {"count": 0}
 
@@ -100,6 +109,7 @@ def run_scan(
             rules_dir=rules_dir,
             enable_entropy=enable_entropy,
             scan_pe_strings=scan_pe_strings,
+            single_file=single_file,
             progress_callback=_wrapped_progress,
         ))
 
@@ -108,6 +118,7 @@ def run_scan(
             "dll_hijack", dll_hijack_module.run,
             target_dir=target_dir,
             services_file=services_file,
+            single_file=single_file,
             progress_callback=_wrapped_progress,
         ))
 
@@ -116,6 +127,7 @@ def run_scan(
             "signature", signature_module.run,
             target_dir=target_dir,
             use_osslsigncode=use_osslsigncode,
+            single_file=single_file,
             progress_callback=_wrapped_progress,
         ))
 
@@ -123,6 +135,7 @@ def run_scan(
         all_findings.extend(_run_module(
             "re_exposure", re_exposure_module.run,
             target_dir=target_dir,
+            single_file=single_file,
             progress_callback=_wrapped_progress,
         ))
 

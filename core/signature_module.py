@@ -35,6 +35,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives.serialization import pkcs7
 from cryptography.x509.oid import NameOID
 
+from core.fs_walk import find_pe_files
 from core.models import Finding, Severity
 from core.pe_utils import (
     extract_pkcs7_from_win_certificate,
@@ -182,13 +183,6 @@ def run_osslsigncode_verify(pe_path: Path) -> tuple[Optional[bool], Optional[str
         digest_mismatch = True
 
     return verified, output.strip(), digest_mismatch
-
-
-def _find_pe_files(target_dir: Path) -> list[Path]:
-    results = []
-    for ext in (".exe", ".dll", ".sys", ".ocx"):
-        results.extend(target_dir.rglob(f"*{ext}"))
-    return [p for p in results if is_pe_file(p)]
 
 
 def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) -> list[Finding]:
@@ -587,13 +581,16 @@ def _auto_update_finding(pe_path: Path) -> Finding | None:
 def run(
     target_dir: str | Path,
     use_osslsigncode: bool = True,
+    single_file: str | Path | None = None,
     progress_callback=None,
 ) -> list[Finding]:
     """
     Entry point for Module 3. Statically analyzes Authenticode signatures
-    across every PE file under target_dir.
+    across every PE file under target_dir, or — if `single_file` is given —
+    just that one PE file.
     """
     target_dir = Path(target_dir)
+    single_file = Path(single_file) if single_file else None
     all_findings: list[Finding] = []
     seen_fingerprints: set[str] = set()
     all_sig_info: list[BinarySignatureInfo] = []
@@ -607,7 +604,7 @@ def run(
                 seen_fingerprints.add(fp)
                 all_findings.append(f)
 
-    for pe_path in _find_pe_files(target_dir):
+    for pe_path in find_pe_files(target_dir, single_file=single_file):
         if progress_callback:
             progress_callback(str(pe_path))
 
@@ -616,6 +613,9 @@ def run(
         _add(_findings_for_binary(sig_info, use_osslsigncode))
         _add([_auto_update_finding(pe_path)])
 
-    _add(_publisher_consistency_findings(all_sig_info))
+    # Publisher-consistency cross-checks only make sense across multiple
+    # binaries; skip in single-file scope since there's nothing to compare.
+    if single_file is None:
+        _add(_publisher_consistency_findings(all_sig_info))
 
     return all_findings

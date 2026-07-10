@@ -78,6 +78,7 @@ class Finding:
             "offset": self.offset,
             "tags": self.tags,
             "confidence": self.confidence,
+            "extra": self.extra,
             "fingerprint": self.fingerprint(),
         }
         return d

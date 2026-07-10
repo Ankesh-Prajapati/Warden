@@ -26,6 +26,7 @@ from pathlib import Path
 
 import yaml
 
+from core.fs_walk import find_pe_files
 from core.models import Finding, Severity
 from core.pe_utils import (
     MitigationInfo,
@@ -64,13 +65,6 @@ def _load_packer_signatures(path: Path | None = None) -> dict:
     path = path or _PACKER_SIGNATURES_PATH
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
-
-
-def _find_pe_files(target_dir: Path) -> list[Path]:
-    results = []
-    for ext in (".exe", ".dll", ".sys", ".ocx"):
-        results.extend(target_dir.rglob(f"*{ext}"))
-    return [p for p in results if is_pe_file(p)]
 
 
 # ---------------------------------------------------------------------------
@@ -455,14 +449,17 @@ def _anti_debug_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
 def run(
     target_dir: str | Path,
     packer_signatures_path: str | Path | None = None,
+    single_file: str | Path | None = None,
     progress_callback=None,
 ) -> list[Finding]:
     """
     Entry point for Module 4. Statically analyzes every PE file under
     target_dir for exploit-mitigation exposure, packer/obfuscation
-    indicators, PDB leakage, and anti-debug maturity signals.
+    indicators, PDB leakage, and anti-debug maturity signals — or, if
+    `single_file` is given, just that one PE file.
     """
     target_dir = Path(target_dir)
+    single_file = Path(single_file) if single_file else None
     signatures = _load_packer_signatures(Path(packer_signatures_path) if packer_signatures_path else None)
 
     all_findings: list[Finding] = []
@@ -477,7 +474,7 @@ def run(
                 seen_fingerprints.add(fp)
                 all_findings.append(f)
 
-    for pe_path in _find_pe_files(target_dir):
+    for pe_path in find_pe_files(target_dir, single_file=single_file):
         if progress_callback:
             progress_callback(str(pe_path))
 

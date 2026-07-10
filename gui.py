@@ -590,13 +590,19 @@ class WardenGUI:
             target = self.target_path.get().strip()
             target_path = Path(target)
 
-            scan_root = target_path if target_path.is_dir() else target_path.parent
+            single_file: Path | None = None
             if target_path.is_file():
+                single_file = target_path
+                scan_root = target_path.parent
                 self._msg_queue.put((
                     "log",
-                    f"Single-file target selected \u2014 scanning containing folder "
-                    f"'{scan_root}' so DLL/config context is included.",
+                    f"Single-file target selected \u2014 analysis is restricted to "
+                    f"'{target_path.name}' only (its folder is used only for "
+                    f"sibling-DLL context in Module 2, nothing else in that "
+                    f"folder is scanned).",
                 ))
+            else:
+                scan_root = target_path
 
             modules = []
             if self.mod_secrets.get():
@@ -612,7 +618,7 @@ class WardenGUI:
             self._msg_queue.put(("log", f"Target: {scan_root}"))
 
             from core.fs_walk import iter_target_files
-            file_count = sum(1 for _ in iter_target_files(scan_root))
+            file_count = sum(1 for _ in iter_target_files(scan_root, single_file=single_file))
             total_ticks = max(file_count * len(modules), 1)
             self._msg_queue.put(("log", f"Found {file_count} eligible files \u2014 scanning with {len(modules)} module(s)\u2026"))
             self._msg_queue.put(("max", total_ticks))
@@ -640,6 +646,7 @@ class WardenGUI:
                 scan_pe_strings=self.scan_pe_strings.get(),
                 services_file=services_file,
                 use_osslsigncode=self.use_osslsigncode.get(),
+                single_file=single_file,
                 progress_callback=progress_callback,
                 error_callback=error_callback,
             )

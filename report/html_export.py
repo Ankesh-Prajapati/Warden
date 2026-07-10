@@ -361,18 +361,24 @@ def _render_risk_banner(counts: dict) -> str:
 def _group_findings(findings: list[dict]) -> list[dict]:
     """Collapse findings that represent the same vulnerability (same rule +
     title + severity) into one entry, listing every affected file path
-    instead of repeating the whole finding block per file."""
+    instead of repeating the whole finding block per file. Each location's
+    code context (when the module supplied one) travels with it so the
+    report can still show exactly where to look for every affected file,
+    not just the first one."""
     grouped: dict[tuple, dict] = {}
     order: list[tuple] = []
     for f in findings:
         key = (f["module"], f["rule_id"], f["title"], f["severity"])
         loc = f["file_path"] + (f" (line {f['line_number']})" if f.get("line_number") else "")
+        context = (f.get("extra") or {}).get("context") or ""
         if key not in grouped:
             grouped[key] = dict(f)
             grouped[key]["locations"] = [loc]
+            grouped[key]["contexts"] = [context]
             order.append(key)
         else:
             grouped[key]["locations"].append(loc)
+            grouped[key]["contexts"].append(context)
     return [grouped[k] for k in order]
 
 
@@ -381,6 +387,7 @@ def _render_finding(f: dict, idx: int) -> str:
     conf_class = "confidence-low" if f.get("confidence") == "Low" else ""
     tags_html = "".join(f"<span>{_esc(t)}</span>" for t in f.get("tags", []))
     locations = f.get("locations", [f["file_path"]])
+    contexts = f.get("contexts", [])
     affected_badge = f'<span class="affected-count">{len(locations)} affected file{"s" if len(locations) != 1 else ""}</span>'
 
     if len(locations) > 3:
@@ -391,6 +398,30 @@ def _render_finding(f: dict, idx: int) -> str:
     </details>"""
     else:
         files_html = "".join(f"<div class='evidence-box' style='margin-bottom:4px;'>{_esc(loc)}</div>" for loc in locations)
+
+    # Multi-line code-context snippets (matched line + surrounding lines,
+    # numbered) for each affected location that has one — this is what lets
+    # an analyst pinpoint the exact spot in the file instead of just seeing
+    # the bare matched string in isolation.
+    context_entries = [(loc, ctx) for loc, ctx in zip(locations, contexts) if ctx]
+    context_html = ""
+    if context_entries:
+        shown = context_entries[:3]
+        blocks = "".join(
+            f"<div style='margin-bottom:8px;'>"
+            f"<div style='color:var(--muted); font-size:10.5px; margin-bottom:3px;'>{_esc(loc)}</div>"
+            f"<pre class='evidence-box' style='margin:0;'>{_esc(ctx)}</pre>"
+            f"</div>"
+            for loc, ctx in shown
+        )
+        more_note = (
+            f"<div style='color:var(--muted); font-size:11px;'>+ {len(context_entries) - 3} more location(s) with context not shown here — see Affected Files above.</div>"
+            if len(context_entries) > 3 else ""
+        )
+        context_html = f"""<div class="finding-section">
+    <div class="label">Code Context</div>
+    {blocks}{more_note}
+  </div>"""
 
     search_blob = _esc(" ".join([f["title"], f["rule_id"], f["module"]] + [l for l in locations[:50]])).lower()
 
@@ -425,6 +456,7 @@ def _render_finding(f: dict, idx: int) -> str:
     <div class="label">Evidence</div>
     <div class="evidence-box">{_esc(f['evidence'])}</div>
   </div>
+  {context_html}
   <div class="finding-section">
     <div class="label">Description</div>
     <div>{_esc(f['description'])}</div>

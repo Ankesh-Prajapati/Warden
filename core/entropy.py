@@ -15,6 +15,14 @@ from collections import Counter
 # base64, hex, and common key-ish separators).
 _CANDIDATE_RE = re.compile(r"[A-Za-z0-9+/_\-=]{20,}")
 
+# Standard GUID/UUID shapes (with or without braces/dashes) are hex data,
+# not secrets — compiled binaries and config files are full of them
+# (class IDs, component IDs, .NET type GUIDs) and their entropy sits right
+# at the hex-charset threshold, making them a common false-positive source.
+_GUID_RE = re.compile(
+    r"^\{?[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}\}?$"
+)
+
 # Tuned thresholds. Base64-like strings have max entropy ~6 bits/char (log2(64)).
 # Hex strings have max entropy 4 bits/char (log2(16)). We use two thresholds
 # depending on the apparent charset to reduce false positives on hex-only data.
@@ -70,10 +78,12 @@ def find_high_entropy_candidates(
         if candidate in seen:
             continue
         # Skip obvious non-secrets: repeated-char runs, all-digit sequences
-        # (often just numeric IDs), and common placeholder patterns.
+        # (often just numeric IDs), and standard GUID/UUID shapes.
         if len(set(candidate)) <= 2:
             continue
         if candidate.isdigit():
+            continue
+        if _GUID_RE.match(candidate):
             continue
         if is_high_entropy(candidate, b64_threshold, hex_threshold):
             seen.add(candidate)

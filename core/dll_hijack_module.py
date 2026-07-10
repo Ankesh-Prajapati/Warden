@@ -23,7 +23,7 @@ from pathlib import Path
 
 import yaml
 
-from core.fs_walk import check_permissive_permissions
+from core.fs_walk import check_permissive_permissions, find_pe_files
 from core.models import Finding, Severity
 from core.pe_utils import PEInfo, is_pe_file, parse_pe
 
@@ -57,15 +57,15 @@ class ServiceEntry:
     source: str  # file it was found in
 
 
-def _find_pe_files(target_dir: Path) -> list[Path]:
-    results = []
-    for ext in (".exe", ".dll", ".sys", ".ocx"):
-        results.extend(target_dir.rglob(f"*{ext}"))
-    return [p for p in results if is_pe_file(p)]
+def _build_local_dll_inventory(target_dir: Path, single_file: Path | None = None) -> set[str]:
+    """Lowercased filenames of every DLL physically present under target_dir.
 
-
-def _build_local_dll_inventory(target_dir: Path) -> set[str]:
-    """Lowercased filenames of every DLL physically present under target_dir."""
+    When `single_file` is set (a single-EXE scan), this is scoped to just
+    that file's own directory (non-recursive) rather than the whole tree —
+    enough to check for sibling DLLs relevant to that one binary's hijack
+    surface, without pulling unrelated files into the analysis."""
+    if single_file is not None:
+        return {p.name.lower() for p in Path(single_file).parent.glob("*.dll")}
     return {p.name.lower() for p in target_dir.rglob("*.dll")}
 
 
@@ -154,10 +154,16 @@ def parse_services_from_sc_query_text(text: str, source_name: str) -> list[Servi
     return entries
 
 
-def _collect_service_entries(target_dir: Path, services_file: Path | None) -> list[ServiceEntry]:
+def _collect_service_entries(
+    target_dir: Path, services_file: Path | None, single_file: Path | None = None
+) -> list[ServiceEntry]:
     entries: list[ServiceEntry] = []
 
-    for reg_path in target_dir.rglob("*.reg"):
+    # In single-EXE scope, there's no folder tree to pull .reg exports from —
+    # only the optional explicit services_file (if provided) applies.
+    reg_candidates = [] if single_file is not None else target_dir.rglob("*.reg")
+
+    for reg_path in reg_candidates:
         text = None
         try:
             raw = reg_path.read_bytes()
@@ -422,16 +428,22 @@ def run(
     target_dir: str | Path,
     services_file: str | Path | None = None,
     system_dlls_path: str | Path | None = None,
+    single_file: str | Path | None = None,
     progress_callback=None,
 ) -> list[Finding]:
     """
     Entry point for Module 2. Statically analyzes every PE file under
     target_dir for DLL hijacking risk indicators, plus scans for unquoted
     service paths from .reg exports and/or an optional services-file.
+
+    If `single_file` is given, analysis is restricted to that one PE file
+    (plus its own directory's DLL inventory for hijack-surface context)
+    instead of every PE file under target_dir.
     """
     target_dir = Path(target_dir)
+    single_file = Path(single_file) if single_file else None
     known_system_dlls = _load_known_system_dlls(Path(system_dlls_path) if system_dlls_path else None)
-    local_dll_inventory = _build_local_dll_inventory(target_dir)
+    local_dll_inventory = _build_local_dll_inventory(target_dir, single_file=single_file)
 
     all_findings: list[Finding] = []
     seen_fingerprints: set[str] = set()
@@ -448,7 +460,7 @@ def run(
     # --- Per-binary analysis ---
     flagged_writable_dirs: set[str] = set()
 
-    for pe_path in _find_pe_files(target_dir):
+    for pe_path in find_pe_files(target_dir, single_file=single_file):
         if progress_callback:
             progress_callback(str(pe_path))
 
@@ -467,7 +479,9 @@ def run(
                 flagged_writable_dirs.add(parent_key)
 
     # --- Service path analysis ---
-    service_entries = _collect_service_entries(target_dir, Path(services_file) if services_file else None)
+    service_entries = _collect_service_entries(
+        target_dir, Path(services_file) if services_file else None, single_file=single_file
+    )
     _add(_service_path_findings(service_entries))
 
     return all_findings

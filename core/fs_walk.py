@@ -42,11 +42,30 @@ SKIP_DIR_NAMES = {".git", "__pycache__", "node_modules"}
 MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB
 
 
-def iter_target_files(root: Path):
+def iter_target_files(root: Path, single_file: Path | None = None):
     """
-    Yield Path objects for every file under `root` worth scanning, based on
-    extension allowlist. Skips oversized files and common noise directories.
+    Yield Path objects for every file worth scanning, based on extension
+    allowlist. Skips oversized files and common noise directories.
+
+    If `single_file` is given, scope is restricted to exactly that one path
+    (still subject to the extension allowlist and size guard) instead of
+    walking `root` — this is what a "scan this one EXE" selection in the GUI
+    maps to, so picking a single file never pulls in unrelated files that
+    happen to sit in the same folder.
     """
+    if single_file is not None:
+        p = Path(single_file)
+        ext = p.suffix.lower()
+        if ext not in ALL_SCANNED_EXTENSIONS:
+            return
+        try:
+            if not p.is_file() or p.stat().st_size > MAX_FILE_SIZE_BYTES:
+                return
+        except OSError:
+            return
+        yield p
+        return
+
     root = Path(root)
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIR_NAMES]
@@ -61,6 +80,32 @@ def iter_target_files(root: Path):
             except OSError:
                 continue
             yield p
+
+
+def find_pe_files(target_dir: Path, single_file: Path | None = None) -> list[Path]:
+    """
+    Return every PE file (.exe/.dll/.sys/.ocx) that is a genuine PE image
+    under `target_dir`, or — when `single_file` is given — just that one
+    file (if it is itself a valid PE).
+
+    Shared by Modules 2-4 (dll_hijack, signature, re_exposure) so a single
+    "scan this one EXE" selection is honored consistently everywhere instead
+    of each module independently re-walking the whole containing folder.
+    """
+    # Local import to avoid a circular import at module load time.
+    from core.pe_utils import is_pe_file
+
+    if single_file is not None:
+        p = Path(single_file)
+        if p.suffix.lower() in PE_EXTENSIONS and p.is_file() and is_pe_file(p):
+            return [p]
+        return []
+
+    target_dir = Path(target_dir)
+    results: list[Path] = []
+    for ext in (".exe", ".dll", ".sys", ".ocx"):
+        results.extend(target_dir.rglob(f"*{ext}"))
+    return [p for p in results if is_pe_file(p)]
 
 
 def classify_file(path: Path) -> str:
