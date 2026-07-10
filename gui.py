@@ -550,6 +550,14 @@ class WardenGUI:
         out_dir = self.output_dir.get().strip()
         if not out_dir or not Path(out_dir).exists():
             return "Select a valid output folder."
+        # Catch permission problems now, not after a potentially long scan
+        # finishes and the report write fails at the very last step.
+        try:
+            probe = Path(out_dir) / ".warden_write_test.tmp"
+            probe.write_text("ok")
+            probe.unlink()
+        except OSError as e:
+            return f"Output folder is not writable:\n{out_dir}\n\n({e})"
         return None
 
     def _set_status_pill(self, bg, fg):
@@ -617,10 +625,25 @@ class WardenGUI:
             self._msg_queue.put(("log", f"Modules: {', '.join(modules)}"))
             self._msg_queue.put(("log", f"Target: {scan_root}"))
 
-            from core.fs_walk import iter_target_files
+            from core.fs_walk import find_pe_files, iter_target_files
             file_count = sum(1 for _ in iter_target_files(scan_root, single_file=single_file))
-            total_ticks = max(file_count * len(modules), 1)
-            self._msg_queue.put(("log", f"Found {file_count} eligible files \u2014 scanning with {len(modules)} module(s)\u2026"))
+            pe_file_count = len(find_pe_files(scan_root, single_file=single_file))
+
+            # Only "secrets" walks every eligible file type; the other three
+            # modules only ever touch PE binaries — weighting the progress
+            # total this way keeps the bar's pace roughly honest instead of
+            # assuming every module scans every file.
+            total_ticks = 0
+            if "secrets" in modules:
+                total_ticks += file_count
+            total_ticks += pe_file_count * sum(1 for m in ("dll_hijack", "signature", "re_exposure") if m in modules)
+            total_ticks = max(total_ticks, 1)
+
+            self._msg_queue.put((
+                "log",
+                f"Found {file_count} eligible file(s) ({pe_file_count} PE binaries) "
+                f"\u2014 scanning with {len(modules)} module(s)\u2026",
+            ))
             self._msg_queue.put(("max", total_ticks))
 
             files_scanned = {"count": 0}
@@ -676,6 +699,8 @@ class WardenGUI:
             self._msg_queue.put(("log", "Scan cancelled by user."))
             self._msg_queue.put(("cancelled", None))
         except Exception as e:
+            import traceback
+            self._msg_queue.put(("log", "ERROR: " + traceback.format_exc()))
             self._msg_queue.put(("error", str(e)))
 
     def _on_scan_complete(self, payload: dict):

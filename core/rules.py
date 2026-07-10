@@ -33,8 +33,14 @@ class RuleLoadError(Exception):
     pass
 
 
-def load_rules_from_file(path: Path) -> list[Rule]:
-    """Load and compile rules from a single YAML rule-pack file."""
+def load_rules_from_file(path: Path, warn=None) -> list[Rule]:
+    """Load and compile rules from a single YAML rule-pack file.
+
+    `warn`, if given, is called with each non-fatal warning message instead
+    of printing to stdout — needed so rule-load problems (bad regex,
+    duplicate ids) actually surface in the GUI log / CLI output instead of
+    vanishing into a background thread's stdout that nobody sees.
+    """
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
 
@@ -66,17 +72,23 @@ def load_rules_from_file(path: Path) -> list[Rule]:
         # Non-fatal: skip bad rules but surface the problem so a broken
         # community-contributed rule pack doesn't silently disable itself.
         for err in errors:
-            print(f"[rules] WARNING: {err}")
+            msg = f"[rules] WARNING: {err}"
+            if warn:
+                warn(msg)
+            else:
+                print(msg)
 
     return rules
 
 
-def load_rules(rules_dir: Path | None = None) -> list[Rule]:
+def load_rules(rules_dir: Path | None = None, warn=None) -> list[Rule]:
     """
     Load all rule packs from a directory (default: bundled rules/ dir).
 
     Any *.yaml or *.yml file in the directory is treated as a rule pack,
     so users can drop in additional packs alongside the default one.
+    `warn`, if given, receives non-fatal warning strings (see
+    load_rules_from_file) instead of them going to stdout.
     """
     if rules_dir is None:
         rules_dir = Path(__file__).resolve().parent.parent / "rules"
@@ -89,9 +101,13 @@ def load_rules(rules_dir: Path | None = None) -> list[Rule]:
     seen_ids: set[str] = set()
 
     for path in sorted(rules_dir.glob("*.yml")) + sorted(rules_dir.glob("*.yaml")):
-        for rule in load_rules_from_file(path):
+        for rule in load_rules_from_file(path, warn=warn):
             if rule.id in seen_ids:
-                print(f"[rules] WARNING: duplicate rule id '{rule.id}' in {path.name}, skipping")
+                msg = f"[rules] WARNING: duplicate rule id '{rule.id}' in {path.name}, skipping"
+                if warn:
+                    warn(msg)
+                else:
+                    print(msg)
                 continue
             seen_ids.add(rule.id)
             all_rules.append(rule)

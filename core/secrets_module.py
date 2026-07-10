@@ -28,15 +28,39 @@ from core.rules import Rule, load_rules
 # Placeholder/test values that regex rules commonly false-positive on.
 # Evidence matching these (case-insensitive) is downgraded to Low confidence
 # rather than dropped entirely, so analysts can still eyeball and dismiss.
+# Placeholder/test *values* — these mark an obviously fake credential value,
+# e.g. `api_key = changeme`. Deliberately does NOT include generic words like
+# "secret" or "password", since those are normal parts of legitimate
+# variable names (client_secret, db_password, secret_key, ...) — matching
+# them against the whole evidence string (as opposed to just the value)
+# used to downgrade most real credential findings to Low confidence, which
+# is the opposite of what a VAPT tool should do.
 PLACEHOLDER_MARKERS = {
     "changeme", "changeit", "example", "your_api_key", "xxxxxxxx",
-    "password", "12345678", "test123", "dummy", "placeholder",
-    "insert_key_here", "todo", "yourpassword", "secret",
+    "12345678", "test123", "dummy", "placeholder",
+    "insert_key_here", "todo", "yourpassword", "replaceme", "sample",
+    "<insert", "<your", "<api", "notarealkey", "notreal", "fakekey",
 }
 
 
+def _isolate_value(evidence: str) -> str:
+    """
+    Best-effort isolation of the *value* side of a `key = value` /
+    `key: value` match, so placeholder detection judges the credential
+    itself rather than the variable name it's assigned to (which routinely
+    contains words like "secret" or "password" even for real credentials).
+    Falls back to the full evidence string when no separator is present.
+    """
+    for sep in ("=", ":"):
+        if sep in evidence:
+            candidate = evidence.rsplit(sep, 1)[-1].strip().strip("'\"")
+            if candidate:
+                return candidate
+    return evidence
+
+
 def _looks_like_placeholder(evidence: str) -> bool:
-    lowered = evidence.lower()
+    lowered = _isolate_value(evidence).lower()
     return any(marker in lowered for marker in PLACEHOLDER_MARKERS)
 
 
@@ -322,6 +346,7 @@ def run(
     scan_pe_strings: bool = True,
     single_file: str | Path | None = None,
     progress_callback=None,
+    error_callback=None,
 ) -> list[Finding]:
     """
     Entry point for Module 1. Walks `target_dir`, scans every eligible file,
@@ -336,10 +361,14 @@ def run(
             instead of walking target_dir.
         progress_callback: optional callable(file_path: str) invoked per file,
             for CLI progress reporting.
+        error_callback: optional callable(message: str) invoked when a single
+            file fails to scan (corrupt/unreadable/unexpected format) — the
+            file is skipped and the scan continues rather than aborting the
+            whole module and losing every finding already collected.
     """
     target_dir = Path(target_dir)
     single_file = Path(single_file) if single_file else None
-    rules = load_rules(Path(rules_dir) if rules_dir else None)
+    rules = load_rules(Path(rules_dir) if rules_dir else None, warn=error_callback)
 
     all_findings: list[Finding] = []
     seen_fingerprints: set[str] = set()
@@ -355,32 +384,39 @@ def run(
         if progress_callback:
             progress_callback(str(path))
 
-        kind = classify_file(path)
-        file_findings: list[Finding] = []
+        try:
+            kind = classify_file(path)
+            file_findings: list[Finding] = []
 
-        if kind == "text":
-            content = read_text_safely(path)
-            if content:
-                file_findings = _scan_text_content(content, str(path), rules, enable_entropy)
+            if kind == "text":
+                content = read_text_safely(path)
+                if content:
+                    file_findings = _scan_text_content(content, str(path), rules, enable_entropy)
 
-        elif kind == "pe" and scan_pe_strings and is_pe_file(path):
-            file_findings = _scan_pe_strings(path, rules, enable_entropy)
+            elif kind == "pe" and scan_pe_strings and is_pe_file(path):
+                file_findings = _scan_pe_strings(path, rules, enable_entropy)
 
-        elif kind == "db":
-            # v1: sniff raw bytes for plaintext PII/credential patterns only;
-            # no structured DB parsing (SQLite page format, Access JET) yet.
-            try:
-                raw = path.read_bytes()[: 20 * 1024 * 1024]
-                content = raw.decode("utf-8", errors="ignore")
-            except OSError:
-                content = ""
-            if content:
-                file_findings = _scan_text_content(content, str(path), rules, enable_entropy)
-                for f in file_findings:
-                    f.tags = list(set(f.tags + ["local-database"]))
+            elif kind == "db":
+                # v1: sniff raw bytes for plaintext PII/credential patterns only;
+                # no structured DB parsing (SQLite page format, Access JET) yet.
+                try:
+                    raw = path.read_bytes()[: 20 * 1024 * 1024]
+                    content = raw.decode("utf-8", errors="ignore")
+                except OSError:
+                    content = ""
+                if content:
+                    file_findings = _scan_text_content(content, str(path), rules, enable_entropy)
+                    for f in file_findings:
+                        f.tags = list(set(f.tags + ["local-database"]))
 
-        if file_findings:
-            _add(file_findings)
-            _add(_flag_permissions(path, file_findings))
+            if file_findings:
+                _add(file_findings)
+                _add(_flag_permissions(path, file_findings))
+        except Exception as e:
+            # One malformed/unreadable file must never wipe out every
+            # finding already collected from the rest of the scan.
+            if error_callback:
+                error_callback(f"secrets: skipped '{path}' after error: {e}")
+            continue
 
     return all_findings

@@ -47,10 +47,24 @@ class PEInfo:
 
 
 def is_pe_file(path: Path) -> bool:
-    """Cheap check: does the file start with the MZ header?"""
+    """
+    Verify this is a genuine PE image, not just any file that happens to
+    start with the MZ magic bytes (the DOS stub header is only two bytes —
+    plenty of non-PE files, truncated downloads, or renamed files can
+    coincidentally start with 'MZ'). Confirms the e_lfanew pointer at
+    offset 0x3C resolves to an actual "PE\\0\\0" signature before treating
+    the file as a PE binary anywhere in the scan.
+    """
     try:
         with open(path, "rb") as f:
-            return f.read(2) == b"MZ"
+            header = f.read(64)
+            if len(header) < 64 or header[:2] != b"MZ":
+                return False
+            e_lfanew = int.from_bytes(header[0x3C:0x40], "little")
+            if e_lfanew <= 0 or e_lfanew > 16 * 1024 * 1024:
+                return False  # sanity guard against a garbage/corrupt pointer
+            f.seek(e_lfanew)
+            return f.read(4) == b"PE\x00\x00"
     except OSError:
         return False
 

@@ -430,6 +430,7 @@ def run(
     system_dlls_path: str | Path | None = None,
     single_file: str | Path | None = None,
     progress_callback=None,
+    error_callback=None,
 ) -> list[Finding]:
     """
     Entry point for Module 2. Statically analyzes every PE file under
@@ -464,19 +465,24 @@ def run(
         if progress_callback:
             progress_callback(str(pe_path))
 
-        pe_info = parse_pe(pe_path)
-        if not pe_info.is_valid_pe:
+        try:
+            pe_info = parse_pe(pe_path)
+            if not pe_info.is_valid_pe:
+                continue
+
+            _add([_search_order_finding(pe_path, pe_info)])
+            _add(_phantom_dll_findings(pe_path, pe_info, known_system_dlls, local_dll_inventory))
+
+            parent_key = str(pe_path.parent)
+            if parent_key not in flagged_writable_dirs:
+                wf = _writable_directory_finding(pe_path)
+                if wf:
+                    _add([wf])
+                    flagged_writable_dirs.add(parent_key)
+        except Exception as e:
+            if error_callback:
+                error_callback(f"dll_hijack: skipped '{pe_path}' after error: {e}")
             continue
-
-        _add([_search_order_finding(pe_path, pe_info)])
-        _add(_phantom_dll_findings(pe_path, pe_info, known_system_dlls, local_dll_inventory))
-
-        parent_key = str(pe_path.parent)
-        if parent_key not in flagged_writable_dirs:
-            wf = _writable_directory_finding(pe_path)
-            if wf:
-                _add([wf])
-                flagged_writable_dirs.add(parent_key)
 
     # --- Service path analysis ---
     service_entries = _collect_service_entries(

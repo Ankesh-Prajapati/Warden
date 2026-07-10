@@ -7,9 +7,21 @@ randomness — the same technique used by gitleaks/trufflehog's entropy checks.
 """
 from __future__ import annotations
 
+import base64
 import math
 import re
 from collections import Counter
+
+# Magic bytes for common binary formats that show up base64-encoded inside
+# config/resource/XML files (embedded icons, fonts, small archives) — these
+# are exactly the kind of long, high-entropy blob that used to get flagged
+# as a "possible secret" purely on randomness, which is a frequent and
+# unhelpful false-positive source in real-world installers.
+_BINARY_MAGIC_PREFIXES = (
+    b"\x89PNG", b"\xff\xd8\xff", b"GIF87a", b"GIF89a", b"BM",
+    b"PK\x03\x04", b"%PDF", b"\x00\x01\x00\x00", b"OTTO",
+    b"\x1f\x8b\x08",  # gzip
+)
 
 # Candidate substrings are extracted with this charset (typical secret alphabets:
 # base64, hex, and common key-ish separators).
@@ -31,6 +43,25 @@ DEFAULT_B64_THRESHOLD = 4.3
 DEFAULT_HEX_THRESHOLD = 3.3
 MIN_LENGTH = 20
 MAX_LENGTH = 4096  # guard against pathological giant single-token lines
+
+
+def _looks_like_encoded_binary_blob(candidate: str) -> bool:
+    """
+    True if `candidate` base64-decodes to the start of a known binary format
+    (PNG/JPEG/GIF/BMP/ZIP/PDF/font/gzip). Long base64 blobs of embedded
+    icons, fonts, or small archives inside config/resource/XML files are
+    high-entropy by construction but are not secrets — this keeps them out
+    of the report instead of relying on an analyst to eyeball-dismiss them.
+    """
+    s = candidate.rstrip("=")
+    if len(s) < 8:
+        return False
+    padded = s + "=" * (-len(s) % 4)
+    try:
+        decoded = base64.b64decode(padded, validate=False)
+    except Exception:
+        return False
+    return any(decoded.startswith(sig) for sig in _BINARY_MAGIC_PREFIXES)
 
 
 def shannon_entropy(s: str) -> float:
@@ -84,6 +115,8 @@ def find_high_entropy_candidates(
         if candidate.isdigit():
             continue
         if _GUID_RE.match(candidate):
+            continue
+        if _looks_like_encoded_binary_blob(candidate):
             continue
         if is_high_entropy(candidate, b64_threshold, hex_threshold):
             seen.add(candidate)
