@@ -23,16 +23,30 @@ TEXT_EXTENSIONS = {
     ".config", ".xml", ".json", ".ini", ".env", ".yaml", ".yml",
     ".sql", ".reg", ".txt", ".log", ".properties", ".conf", ".cfg",
     ".manifest", ".ps1", ".bat", ".cmd", ".vbs", ".js",
+    # Linux/macOS config, unit, and metadata formats (additive — does not
+    # change how any Windows file is classified).
+    ".toml", ".service", ".timer", ".socket", ".desktop", ".plist",
+    ".entitlements", ".control", ".list", ".repo",
 }
 
 # Extensions treated as PE binaries for string extraction + PE parsing.
 PE_EXTENSIONS = {".exe", ".dll", ".sys", ".ocx"}
 
+# Extensions treated as ELF binaries/libraries (Linux). Linux executables
+# themselves are frequently extension-less, so callers also sniff by magic
+# bytes (see find_elf_files) rather than relying on this set alone.
+ELF_EXTENSIONS = {".so", ".ko"}
+
+# Extensions treated as Mach-O binaries/libraries/frameworks (macOS).
+MACHO_EXTENSIONS = {".dylib", ".bundle"}
+
 # Local database files scanned for embedded plaintext (opened read-only,
 # content sniffed as bytes rather than parsed as SQL/DB structure in v1).
 DB_EXTENSIONS = {".mdb", ".accdb", ".sqlite", ".sqlite3", ".db"}
 
-ALL_SCANNED_EXTENSIONS = TEXT_EXTENSIONS | PE_EXTENSIONS | DB_EXTENSIONS
+ALL_SCANNED_EXTENSIONS = (
+    TEXT_EXTENSIONS | PE_EXTENSIONS | ELF_EXTENSIONS | MACHO_EXTENSIONS | DB_EXTENSIONS
+)
 
 # Skip these — they bloat scan time and are never config/secret sources.
 SKIP_DIR_NAMES = {".git", "__pycache__", "node_modules"}
@@ -67,10 +81,17 @@ def iter_target_files(root: Path, single_file: Path | None = None):
         return
 
     root = Path(root)
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIR_NAMES]
         for name in filenames:
             p = Path(dirpath) / name
+            # Never follow file symlinks: a scanned target is untrusted by
+            # definition, and a symlink pointing outside the target tree
+            # (e.g. to /etc/passwd or a Windows SAM hive) would otherwise
+            # let the target trick Warden into reading and reporting on
+            # files well outside its intended scan scope.
+            if p.is_symlink():
+                continue
             ext = p.suffix.lower()
             if ext not in ALL_SCANNED_EXTENSIONS:
                 continue
@@ -105,7 +126,78 @@ def find_pe_files(target_dir: Path, single_file: Path | None = None) -> list[Pat
     results: list[Path] = []
     for ext in (".exe", ".dll", ".sys", ".ocx"):
         results.extend(target_dir.rglob(f"*{ext}"))
-    return [p for p in results if is_pe_file(p)]
+    # rglob('**') doesn't descend into symlinked directories, but it does
+    # still match a symlinked *file* directly — exclude those for the same
+    # scan-scope-escape reason as iter_target_files/iter_all_files above.
+    return [p for p in results if not p.is_symlink() and is_pe_file(p)]
+
+
+def iter_all_files(root: Path, single_file: Path | None = None):
+    """
+    Yield every regular file under `root` regardless of extension, skipping
+    noise directories and oversized files.
+
+    Used by the Linux/macOS modules to discover ELF/Mach-O executables and
+    other artifacts (install scripts, package metadata) that commonly ship
+    without a file extension — unlike Windows PEs, which always end in
+    .exe/.dll/.sys/.ocx, so `iter_target_files`'s extension allowlist isn't
+    a reliable way to find them.
+    """
+    if single_file is not None:
+        p = Path(single_file)
+        try:
+            if p.is_file() and p.stat().st_size <= MAX_FILE_SIZE_BYTES:
+                yield p
+        except OSError:
+            return
+        return
+
+    root = Path(root)
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIR_NAMES]
+        for name in filenames:
+            p = Path(dirpath) / name
+            if p.is_symlink():
+                # Same rationale as iter_target_files: never follow a
+                # symlink placed inside an untrusted scan target.
+                continue
+            try:
+                if not p.is_file() or p.stat().st_size > MAX_FILE_SIZE_BYTES:
+                    continue
+            except OSError:
+                continue
+            yield p
+
+
+def find_elf_files(target_dir: Path, single_file: Path | None = None) -> list[Path]:
+    """Return every genuine ELF file under `target_dir` (magic-byte verified),
+    regardless of extension — mirrors find_pe_files for Linux binaries."""
+    from core.binary_utils import is_elf_file
+
+    results: list[Path] = []
+    for p in iter_all_files(target_dir, single_file=single_file):
+        try:
+            if is_elf_file(p):
+                results.append(p)
+        except OSError:
+            continue
+    return results
+
+
+def find_macho_files(target_dir: Path, single_file: Path | None = None) -> list[Path]:
+    """Return every genuine Mach-O file under `target_dir` (magic-byte
+    verified), regardless of extension — mirrors find_pe_files for macOS
+    binaries/frameworks."""
+    from core.binary_utils import is_macho_file
+
+    results: list[Path] = []
+    for p in iter_all_files(target_dir, single_file=single_file):
+        try:
+            if is_macho_file(p):
+                results.append(p)
+        except OSError:
+            continue
+    return results
 
 
 def classify_file(path: Path) -> str:

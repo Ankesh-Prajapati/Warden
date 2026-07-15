@@ -28,6 +28,8 @@ MODULE_LABELS = {
     "dll_hijack": "DLL Hijacking Detection",
     "signature": "Signature / Integrity Check",
     "re_exposure": "RE / Anti-Tamper Exposure",
+    "linux": "Linux Thick-Client Assessment",
+    "macos": "macOS Thick-Client Assessment",
 }
 
 

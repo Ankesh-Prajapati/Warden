@@ -583,6 +583,7 @@ def run(
     use_osslsigncode: bool = True,
     single_file: str | Path | None = None,
     progress_callback=None,
+    error_callback=None,
 ) -> list[Finding]:
     """
     Entry point for Module 3. Statically analyzes Authenticode signatures
@@ -608,14 +609,23 @@ def run(
         if progress_callback:
             progress_callback(str(pe_path))
 
-        sig_info = parse_signature(pe_path)
-        all_sig_info.append(sig_info)
-        _add(_findings_for_binary(sig_info, use_osslsigncode))
-        _add([_auto_update_finding(pe_path)])
+        try:
+            sig_info = parse_signature(pe_path)
+            all_sig_info.append(sig_info)
+            _add(_findings_for_binary(sig_info, use_osslsigncode))
+            _add([_auto_update_finding(pe_path)])
+        except Exception as e:
+            if error_callback:
+                error_callback(f"signature: skipped '{pe_path}' after error: {e}")
+            continue
 
     # Publisher-consistency cross-checks only make sense across multiple
     # binaries; skip in single-file scope since there's nothing to compare.
     if single_file is None:
-        _add(_publisher_consistency_findings(all_sig_info))
+        try:
+            _add(_publisher_consistency_findings(all_sig_info))
+        except Exception as e:
+            if error_callback:
+                error_callback(f"signature: publisher-consistency check failed: {e}")
 
     return all_findings

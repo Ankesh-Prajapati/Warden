@@ -3,3 +3,5 @@ PyYAML>=6.0
 click>=8.1
 rich>=13.0
 cryptography>=42.0
+PySide6>=6.7
+# reputation module (VirusTotal) uses only Python stdlib (urllib, hashlib) — no new dependency needed

@@ -7,19 +7,28 @@ built, one at a time.
 """
 from __future__ import annotations
 
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core import dll_hijack_module, re_exposure_module, secrets_module, signature_module
+from core import dll_hijack_module, linux_module, macos_module, re_exposure_module, reputation_module, secrets_module, signature_module
+from core.logging_config import get_logger
 from core.models import Finding, ScanMetadata, Severity
+
+logger = get_logger("scanner")
 
 SEVERITY_ORDER = [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW, Severity.INFO]
 
 
 class ScanResult:
-    def __init__(self, metadata: ScanMetadata, findings: list[Finding]):
+    def __init__(self, metadata: ScanMetadata, findings: list[Finding], module_errors: list[str] | None = None):
         self.metadata = metadata
         self.findings = findings
+        # Non-fatal problems encountered during the scan (a module crashed,
+        # a file was unreadable, etc). The scan still completes and returns
+        # every finding collected up to that point — this list is purely
+        # for analyst visibility / audit trail, never for aborting the run.
+        self.module_errors = module_errors or []
 
     def summary_counts(self) -> dict:
         """Counts unique vulnerabilities (module+rule+title+severity), not
@@ -49,6 +58,7 @@ class ScanResult:
             },
             "summary": self.summary_counts(),
             "findings": [f.to_dict() for f in self.sorted_findings()],
+            "module_errors": self.module_errors,
         }
 
 
@@ -61,6 +71,10 @@ def run_scan(
     services_file: str | Path | None = None,
     use_osslsigncode: bool = True,
     single_file: str | Path | None = None,
+    vt_api_key: str | None = None,
+    vt_include_clean: bool = False,
+    vt_max_lookups: int = 40,
+    vt_upload_unknown: bool = False,
     progress_callback=None,
     error_callback=None,
 ) -> ScanResult:
@@ -87,6 +101,7 @@ def run_scan(
 
     metadata = ScanMetadata(target_path=str(single_file) if single_file else str(target_dir))
     all_findings: list[Finding] = []
+    module_errors: list[str] = []
     files_scanned = {"count": 0}
 
     def _wrapped_progress(path: str):
@@ -94,12 +109,24 @@ def run_scan(
         if progress_callback:
             progress_callback(path)
 
+    def _wrapped_error(message: str):
+        module_errors.append(message)
+        logger.warning(message)
+        if error_callback:
+            error_callback(message)
+
     def _run_module(name: str, func, **kwargs) -> list[Finding]:
+        started = datetime.now(timezone.utc)
         try:
-            return func(**kwargs)
+            logger.info("Starting module: %s", name)
+            result = func(error_callback=_wrapped_error, **kwargs)
+            elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+            logger.info("Module %s finished in %.2fs with %d finding(s)", name, elapsed, len(result))
+            return result
         except Exception as e:  # keep scanning other modules on a single failure
-            if error_callback:
-                error_callback(f"{name} module failed and was skipped: {e}")
+            elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+            logger.error("Module %s failed after %.2fs: %s\n%s", name, elapsed, e, traceback.format_exc())
+            _wrapped_error(f"{name} module failed and was skipped: {e}")
             return []
 
     if "secrets" in modules:
@@ -139,7 +166,39 @@ def run_scan(
             progress_callback=_wrapped_progress,
         ))
 
+    if "linux" in modules:
+        all_findings.extend(_run_module(
+            "linux", linux_module.run,
+            target_dir=target_dir,
+            rules_dir=rules_dir,
+            enable_entropy=enable_entropy,
+            single_file=single_file,
+            progress_callback=_wrapped_progress,
+        ))
+
+    if "macos" in modules:
+        all_findings.extend(_run_module(
+            "macos", macos_module.run,
+            target_dir=target_dir,
+            rules_dir=rules_dir,
+            enable_entropy=enable_entropy,
+            single_file=single_file,
+            progress_callback=_wrapped_progress,
+        ))
+
+    if "reputation" in modules:
+        all_findings.extend(_run_module(
+            "reputation", reputation_module.run,
+            target_dir=target_dir,
+            api_key=vt_api_key,
+            single_file=single_file,
+            include_clean=vt_include_clean,
+            max_lookups=vt_max_lookups,
+            upload_unknown=vt_upload_unknown,
+            progress_callback=_wrapped_progress,
+        ))
+
     metadata.files_scanned = files_scanned["count"]
     metadata.finished_at = datetime.now(timezone.utc).isoformat()
 
-    return ScanResult(metadata, all_findings)
+    return ScanResult(metadata, all_findings, module_errors)

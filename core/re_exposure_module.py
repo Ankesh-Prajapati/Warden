@@ -451,6 +451,7 @@ def run(
     packer_signatures_path: str | Path | None = None,
     single_file: str | Path | None = None,
     progress_callback=None,
+    error_callback=None,
 ) -> list[Finding]:
     """
     Entry point for Module 4. Statically analyzes every PE file under
@@ -478,15 +479,20 @@ def run(
         if progress_callback:
             progress_callback(str(pe_path))
 
-        pe_info = parse_pe(pe_path)
-        if not pe_info.is_valid_pe:
-            continue
+        try:
+            pe_info = parse_pe(pe_path)
+            if not pe_info.is_valid_pe:
+                continue
 
-        mit = get_security_mitigations(pe_path)
-        _add(_mitigation_findings(pe_path, mit))
-        _add(_packer_findings(pe_path, pe_info, signatures))
-        _add([_dotnet_obfuscation_finding(pe_path, pe_info, signatures)])
-        _add([_pdb_leak_finding(pe_path, pe_info)])
-        _add([_anti_debug_finding(pe_path, pe_info)])
+            mit = get_security_mitigations(pe_path)
+            _add(_mitigation_findings(pe_path, mit))
+            _add(_packer_findings(pe_path, pe_info, signatures))
+            _add([_dotnet_obfuscation_finding(pe_path, pe_info, signatures)])
+            _add([_pdb_leak_finding(pe_path, pe_info)])
+            _add([_anti_debug_finding(pe_path, pe_info)])
+        except Exception as e:
+            if error_callback:
+                error_callback(f"re_exposure: skipped '{pe_path}' after error: {e}")
+            continue
 
     return all_findings

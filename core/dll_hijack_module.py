@@ -65,8 +65,8 @@ def _build_local_dll_inventory(target_dir: Path, single_file: Path | None = None
     enough to check for sibling DLLs relevant to that one binary's hijack
     surface, without pulling unrelated files into the analysis."""
     if single_file is not None:
-        return {p.name.lower() for p in Path(single_file).parent.glob("*.dll")}
-    return {p.name.lower() for p in target_dir.rglob("*.dll")}
+        return {p.name.lower() for p in Path(single_file).parent.glob("*.dll") if not p.is_symlink()}
+    return {p.name.lower() for p in target_dir.rglob("*.dll") if not p.is_symlink()}
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +161,9 @@ def _collect_service_entries(
 
     # In single-EXE scope, there's no folder tree to pull .reg exports from —
     # only the optional explicit services_file (if provided) applies.
-    reg_candidates = [] if single_file is not None else target_dir.rglob("*.reg")
+    reg_candidates = [] if single_file is not None else [
+        p for p in target_dir.rglob("*.reg") if not p.is_symlink()
+    ]
 
     for reg_path in reg_candidates:
         text = None

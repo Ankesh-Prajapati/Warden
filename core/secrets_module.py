@@ -64,6 +64,28 @@ def _looks_like_placeholder(evidence: str) -> bool:
     return any(marker in lowered for marker in PLACEHOLDER_MARKERS)
 
 
+# Sequences that essentially only ever appear in a regex pattern literal,
+# never in a real credential value. Guards against a specific, easy-to-hit
+# false positive: a credential-detection rule matching its own pattern
+# definition when scanning a rule-pack file (this tool's own rules/*.yaml,
+# or any target that happens to ship its own regex-based validators/WAF
+# rules/security tooling — not a Warden-specific edge case).
+#
+# Requires >=2 distinct markers before suppressing a match, so a real
+# secret that coincidentally contains one stray bracket or backslash isn't
+# silently dropped — an actual regex pattern is a dense cluster of these,
+# not one incidental character.
+_REGEX_SYNTAX_MARKERS = (
+    "(?i)", "(?:", "(?=", "(?!", r"\s*", r"\s+", r"\b", r"\d+", r"\w+",
+    "[^", "]?", "{0,", "{1,", "{2,", "{3,", "{4,", "{6,",
+)
+
+
+def _looks_like_regex_definition(evidence: str) -> bool:
+    hits = sum(1 for marker in _REGEX_SYNTAX_MARKERS if marker in evidence)
+    return hits >= 2
+
+
 def _extract_context(lines: list[str], line_no: int, radius: int = 2, max_line_len: int = 200) -> str:
     """
     Build a numbered, multi-line code-context snippet around `line_no`
@@ -186,6 +208,11 @@ def _scan_text_content(
     for rule in rules:
         for match in rule.finditer(content):
             evidence_raw = match.group(0)
+            if _looks_like_regex_definition(evidence_raw):
+                # This match is a regex pattern literal (e.g. a rule
+                # definition inside a rules/*.yaml-style file), not an
+                # actual hardcoded credential — see _looks_like_regex_definition.
+                continue
             line_no = content.count("\n", 0, match.start()) + 1
             findings.append(
                 Finding(
