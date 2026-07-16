@@ -43,6 +43,8 @@ class PEInfo:
     sections: list[dict] = field(default_factory=list)  # name, entropy, size
     pdb_path: Optional[str] = None
     cert_directory_present: bool = False
+    manifest_xml: Optional[str] = None
+    dependency_edges: list[tuple[str, str]] = field(default_factory=list)
     error: Optional[str] = None
 
 
@@ -233,6 +235,7 @@ def parse_pe(path: Path) -> PEInfo:
                 pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT"],
                 pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_DEBUG"],
                 pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_SECURITY"],
+                pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"],
             ]
         )
     except Exception as e:  # pefile raises bare Exception subclasses
@@ -253,6 +256,7 @@ def parse_pe(path: Path) -> PEInfo:
                 if imp.name
             ]
             info.imported_functions[dll_name] = funcs
+            info.dependency_edges.append((path.name, dll_name))
 
     if hasattr(pe, "DIRECTORY_ENTRY_DELAY_IMPORT"):
         info.has_delay_imports = len(pe.DIRECTORY_ENTRY_DELAY_IMPORT) > 0
@@ -260,6 +264,26 @@ def parse_pe(path: Path) -> PEInfo:
             dll_name = entry.dll.decode("ascii", errors="ignore") if entry.dll else "?"
             if dll_name not in info.imported_dlls:
                 info.imported_dlls.append(dll_name)
+            info.dependency_edges.append((path.name, dll_name))
+
+    # --- Embedded application manifest ---
+    try:
+        if hasattr(pe, "DIRECTORY_ENTRY_RESOURCE"):
+            for entry in pe.DIRECTORY_ENTRY_RESOURCE.entries:
+                if getattr(entry, "id", None) != pefile.RESOURCE_TYPE.get("RT_MANIFEST", 24):
+                    continue
+                for name_entry in getattr(entry.directory, "entries", []):
+                    for lang_entry in getattr(name_entry.directory, "entries", []):
+                        data = lang_entry.data.struct
+                        raw = pe.get_memory_mapped_image()[data.OffsetToData:data.OffsetToData + data.Size]
+                        text = raw.decode("utf-8", errors="ignore").strip("\x00\r\n ")
+                        if text:
+                            info.manifest_xml = text
+                            raise StopIteration
+    except StopIteration:
+        pass
+    except Exception:
+        pass
 
     # --- Sections (entropy used later by re_exposure_module for packer detection) ---
     for section in pe.sections:

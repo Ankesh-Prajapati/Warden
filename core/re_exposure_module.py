@@ -23,9 +23,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 
 import yaml
 
+from core.cache_utils import ScanCache, sha256_file
 from core.fs_walk import find_pe_files
 from core.models import Finding, Severity
 from core.pe_utils import (
@@ -36,6 +38,7 @@ from core.pe_utils import (
     is_pe_file,
     parse_pe,
 )
+from core.plugin_system import compile_yara_rules
 
 # Import functions whose presence signals anti-debug awareness. Presence is
 # a maturity signal only — this module never generates bypass code.
@@ -52,6 +55,35 @@ SENSITIVE_LOGIC_KEYWORDS = (
     "license", "activation", "serial", "unlock", "trial",
     "crypt", "decrypt", "encrypt", "aeskey", "rsakey",
 )
+
+URL_RE = re.compile(r"https?://[^\s'\"<>]+", re.IGNORECASE)
+IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+DOMAIN_RE = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.IGNORECASE)
+REGISTRY_RE = re.compile(r"\bHKEY_(?:LOCAL_MACHINE|CURRENT_USER|CLASSES_ROOT|USERS|CURRENT_CONFIG)\\[^\s'\"<>]+", re.IGNORECASE)
+GUID_RE = re.compile(r"\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?", re.IGNORECASE)
+PIPE_RE = re.compile(r"\\\\\.\\pipe\\[A-Za-z0-9_.-]+", re.IGNORECASE)
+MUTEX_RE = re.compile(r"(?:Global|Local)\\[A-Za-z0-9_.-]{4,}", re.IGNORECASE)
+
+CRYPTO_MARKERS = {
+    "AES": ("aes", "rijndael"),
+    "RSA": ("rsa", "cryptacquirecontext", "bcryptrsaaes"),
+    "RC4": ("rc4", "arcfour"),
+    "MD5": ("md5", "cryptcreatehash"),
+    "SHA1": ("sha1", "sha-1"),
+    "bcrypt": ("bcrypt", "bcrypt.dll"),
+    "PBKDF2": ("pbkdf2", "rfc2898derivebytes"),
+}
+
+FRAMEWORK_MARKERS = {
+    ".NET": ("mscoree.dll", "system.private.corelib", "mscorlib"),
+    "Go": ("go build id", "runtime.gopanic", "golang"),
+    "Rust": ("rustc", "panic_bounds_check", "core::panicking"),
+    "Delphi": ("borland", "delphi", "vcl."),
+    "VB": ("msvbvm60.dll", "visualbasic"),
+    "Java": ("jvm.dll", "java/lang", ".jar"),
+    "Qt": ("qt5core", "qt6core", "qobject"),
+    "Electron": ("electron.asar", "node.dll", "chrome_elf.dll"),
+}
 
 _PACKER_SIGNATURES_PATH = Path(__file__).resolve().parent.parent / "rules" / "packer_signatures.yaml"
 
@@ -446,12 +478,175 @@ def _anti_debug_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
     )
 
 
+def _artifact_findings(pe_path: Path, strings: list[str]) -> list[Finding]:
+    joined = "\n".join(strings)
+    patterns = {
+        "url": URL_RE,
+        "ip": IP_RE,
+        "domain": DOMAIN_RE,
+        "registry-key": REGISTRY_RE,
+        "guid": GUID_RE,
+        "named-pipe": PIPE_RE,
+        "mutex": MUTEX_RE,
+    }
+    findings = []
+    for name, regex in patterns.items():
+        matches = sorted(set(m.group(0).rstrip("),.;") for m in regex.finditer(joined)))[:25]
+        if matches:
+            findings.append(Finding(
+                module="re_exposure",
+                rule_id=f"extracted-{name}s",
+                title=f"Extracted {name.replace('-', ' ')} indicators",
+                severity=Severity.INFO,
+                file_path=str(pe_path),
+                evidence=", ".join(matches[:10]),
+                description="Static string extraction found indicators useful for reverse engineering and attack-surface review.",
+                remediation="Review extracted indicators for unintended endpoints, internal paths, IPC channels, registry persistence, or environment-specific leakage.",
+                tags=["re-exposure", "strings", name],
+                confidence="Medium",
+                extra={name: matches},
+            ))
+    interesting = [s for s in strings if any(k in s.lower() for k in ("password", "secret", "license", "debug", "admin", "token"))][:25]
+    if interesting:
+        findings.append(Finding(
+            module="re_exposure",
+            rule_id="interesting-strings",
+            title="Interesting strings extracted from binary",
+            severity=Severity.INFO,
+            file_path=str(pe_path),
+            evidence=", ".join(interesting[:10]),
+            description="Strings with security-relevant keywords were found in the binary.",
+            remediation="Review these strings to confirm they do not leak credentials, debug behavior, or internal authorization logic.",
+            tags=["re-exposure", "strings"],
+            confidence="Low",
+            extra={"strings": interesting},
+        ))
+    return findings
+
+
+def _crypto_framework_findings(pe_path: Path, pe_info: PEInfo, strings: list[str]) -> list[Finding]:
+    haystack = "\n".join(strings + pe_info.imported_dlls + [fn for funcs in pe_info.imported_functions.values() for fn in funcs]).lower()
+    findings = []
+    crypto = [name for name, markers in CRYPTO_MARKERS.items() if any(m in haystack for m in markers)]
+    if crypto:
+        findings.append(Finding(
+            module="re_exposure",
+            rule_id="crypto-usage-detected",
+            title="Cryptographic library or algorithm usage detected",
+            severity=Severity.INFO,
+            file_path=str(pe_path),
+            evidence=", ".join(crypto),
+            description="Static imports/strings indicate cryptographic functionality such as AES, RSA, RC4, MD5, SHA1, bcrypt, or PBKDF2.",
+            remediation="Review crypto usage for modern algorithms, safe modes, key management, salting, and deprecation of MD5/SHA1/RC4.",
+            tags=["re-exposure", "crypto"],
+            confidence="Medium",
+            extra={"crypto": crypto},
+        ))
+    frameworks = [name for name, markers in FRAMEWORK_MARKERS.items() if any(m in haystack for m in markers)]
+    if frameworks:
+        findings.append(Finding(
+            module="re_exposure",
+            rule_id="compiler-framework-detected",
+            title="Compiler/framework indicators detected",
+            severity=Severity.INFO,
+            file_path=str(pe_path),
+            evidence=", ".join(frameworks),
+            description="Static imports/strings indicate the likely compiler, runtime, or framework family.",
+            remediation="Use the detected framework to choose appropriate review tooling such as ILSpy for .NET, Go/ReSym tooling, Java decompilers, or Electron ASAR inspection.",
+            tags=["re-exposure", "framework"],
+            confidence="Medium",
+            extra={"frameworks": frameworks},
+        ))
+    return findings
+
+
+def _manifest_findings(pe_path: Path, pe_info: PEInfo) -> list[Finding]:
+    xml = pe_info.manifest_xml or ""
+    if not xml:
+        return []
+    lower = xml.lower()
+    hits = []
+    for key in ("requestededexecutionlevel", "requestedexecutionlevel", "autoelevate", "uiaccess"):
+        if key in lower:
+            hits.append(key)
+    if not hits:
+        return [Finding(
+            module="re_exposure",
+            rule_id="embedded-manifest-present",
+            title="Embedded application manifest present",
+            severity=Severity.INFO,
+            file_path=str(pe_path),
+            evidence=xml[:500],
+            description="The PE contains an embedded manifest that may influence process privileges, compatibility, and UAC behavior.",
+            remediation="Review the manifest for least-privilege execution and expected trust settings.",
+            tags=["binary", "manifest"],
+            confidence="Medium",
+            extra={"manifest": xml},
+        )]
+    severity = Severity.HIGH if "requireadministrator" in lower or "autoelevate" in lower else Severity.MEDIUM
+    return [Finding(
+        module="re_exposure",
+        rule_id="manifest-privilege-settings",
+        title="Manifest privilege settings detected",
+        severity=severity,
+        file_path=str(pe_path),
+        evidence=", ".join(hits),
+        description="The embedded manifest references requestedExecutionLevel, autoElevate, uiAccess, or related privilege-affecting settings.",
+        remediation="Use the lowest required requestedExecutionLevel, avoid autoElevate unless explicitly needed and properly signed/trusted, and ensure uiAccess is only enabled for approved assistive UI scenarios.",
+        tags=["binary", "manifest", "privilege"],
+        confidence="High",
+        extra={"manifest": xml},
+    )]
+
+
+def _dependency_graph_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
+    if not pe_info.dependency_edges:
+        return None
+    return Finding(
+        module="re_exposure",
+        rule_id="binary-dependency-graph",
+        title="Binary dependency graph generated from imports",
+        severity=Severity.INFO,
+        file_path=str(pe_path),
+        evidence=", ".join(pe_info.imported_dlls[:20]),
+        description="Imported DLLs were converted into a dependency graph for attack-surface and DLL search-order review.",
+        remediation="Review unexpected dependencies, unsigned third-party DLLs, and any imports that may be loaded from writable directories.",
+        tags=["binary", "dependency-graph", "imports"],
+        confidence="High",
+        extra={"edges": pe_info.dependency_edges},
+    )
+
+
+def _yara_findings(pe_path: Path, yara_rules) -> list[Finding]:
+    if not yara_rules:
+        return []
+    try:
+        matches = yara_rules.match(str(pe_path))
+    except Exception:
+        return []
+    return [Finding(
+        module="re_exposure",
+        rule_id=f"yara-{m.rule}",
+        title=f"YARA rule matched: {m.rule}",
+        severity=Severity.MEDIUM,
+        file_path=str(pe_path),
+        evidence=m.rule,
+        description="A custom YARA rule matched this binary.",
+        remediation="Review the matched rule metadata and strings to determine whether this is expected for the application.",
+        tags=["yara", "custom-rule"],
+        confidence="Medium",
+        extra={"namespace": m.namespace, "tags": list(m.tags), "meta": dict(m.meta)},
+    ) for m in matches]
+
+
 def run(
     target_dir: str | Path,
     packer_signatures_path: str | Path | None = None,
     single_file: str | Path | None = None,
     progress_callback=None,
     error_callback=None,
+    yara_rules_dir: str | Path | None = None,
+    scan_cache: ScanCache | None = None,
 ) -> list[Finding]:
     """
     Entry point for Module 4. Statically analyzes every PE file under
@@ -462,6 +657,7 @@ def run(
     target_dir = Path(target_dir)
     single_file = Path(single_file) if single_file else None
     signatures = _load_packer_signatures(Path(packer_signatures_path) if packer_signatures_path else None)
+    yara_rules = compile_yara_rules(yara_rules_dir)
 
     all_findings: list[Finding] = []
     seen_fingerprints: set[str] = set()
@@ -476,6 +672,8 @@ def run(
                 all_findings.append(f)
 
     for pe_path in find_pe_files(target_dir, single_file=single_file):
+        if scan_cache and scan_cache.unchanged(pe_path, "re_exposure"):
+            continue
         if progress_callback:
             progress_callback(str(pe_path))
 
@@ -490,6 +688,15 @@ def run(
             _add([_dotnet_obfuscation_finding(pe_path, pe_info, signatures)])
             _add([_pdb_leak_finding(pe_path, pe_info)])
             _add([_anti_debug_finding(pe_path, pe_info)])
+            data = pe_path.read_bytes()
+            strings = [s for s, _ in extract_strings_from_bytes(data)]
+            _add(_artifact_findings(pe_path, strings))
+            _add(_crypto_framework_findings(pe_path, pe_info, strings))
+            _add(_manifest_findings(pe_path, pe_info))
+            _add([_dependency_graph_finding(pe_path, pe_info)])
+            _add(_yara_findings(pe_path, yara_rules))
+            if scan_cache:
+                scan_cache.mark_scanned(pe_path, "re_exposure", sha256_file(pe_path))
         except Exception as e:
             if error_callback:
                 error_callback(f"re_exposure: skipped '{pe_path}' after error: {e}")

@@ -84,6 +84,14 @@ class WardenSettings:
         self._qs.setValue("scan/use_osslsigncode", value)
 
     @property
+    def include_inventory(self) -> bool:
+        return self._qs.value("scan/include_inventory", True, bool)
+
+    @include_inventory.setter
+    def include_inventory(self, value: bool) -> None:
+        self._qs.setValue("scan/include_inventory", value)
+
+    @property
     def vt_api_key(self) -> str:
         # Stored via QSettings same as everything else here — this means
         # plaintext in the registry (Windows) / plist (macOS) / config file

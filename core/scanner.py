@@ -11,9 +11,12 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core.cache_utils import ScanCache
 from core import dll_hijack_module, linux_module, macos_module, re_exposure_module, reputation_module, secrets_module, signature_module
+from core.fs_walk import iter_all_files
 from core.logging_config import get_logger
 from core.models import Finding, ScanMetadata, Severity
+from core.plugin_system import load_python_detectors, run_python_detectors
 
 logger = get_logger("scanner")
 
@@ -77,6 +80,12 @@ def run_scan(
     vt_upload_unknown: bool = False,
     progress_callback=None,
     error_callback=None,
+    incremental: bool = False,
+    cache_file: str | Path | None = None,
+    yara_rules_dir: str | Path | None = None,
+    plugins_dir: str | Path | None = None,
+    max_workers: int = 1,
+    include_inventory: bool = True,
 ) -> ScanResult:
     """
     Run the requested modules against target_dir and return a merged ScanResult.
@@ -103,6 +112,7 @@ def run_scan(
     all_findings: list[Finding] = []
     module_errors: list[str] = []
     files_scanned = {"count": 0}
+    scan_cache = ScanCache(target_dir, enabled=incremental, cache_file=cache_file)
 
     def _wrapped_progress(path: str):
         files_scanned["count"] += 1
@@ -138,6 +148,8 @@ def run_scan(
             scan_pe_strings=scan_pe_strings,
             single_file=single_file,
             progress_callback=_wrapped_progress,
+            scan_cache=scan_cache,
+            max_workers=max_workers,
         ))
 
     if "dll_hijack" in modules:
@@ -148,6 +160,15 @@ def run_scan(
             single_file=single_file,
             progress_callback=_wrapped_progress,
         ))
+
+    if plugins_dir:
+        detectors = load_python_detectors(plugins_dir)
+        if detectors:
+            for path in iter_all_files(target_dir, single_file=single_file):
+                try:
+                    all_findings.extend(run_python_detectors(detectors, path))
+                except Exception as e:
+                    _wrapped_error(f"plugin: skipped '{path}' after error: {e}")
 
     if "signature" in modules:
         all_findings.extend(_run_module(
@@ -164,6 +185,8 @@ def run_scan(
             target_dir=target_dir,
             single_file=single_file,
             progress_callback=_wrapped_progress,
+            yara_rules_dir=yara_rules_dir,
+            scan_cache=scan_cache,
         ))
 
     if "linux" in modules:
@@ -174,6 +197,7 @@ def run_scan(
             enable_entropy=enable_entropy,
             single_file=single_file,
             progress_callback=_wrapped_progress,
+            include_inventory=include_inventory,
         ))
 
     if "macos" in modules:
@@ -184,6 +208,7 @@ def run_scan(
             enable_entropy=enable_entropy,
             single_file=single_file,
             progress_callback=_wrapped_progress,
+            include_inventory=include_inventory,
         ))
 
     if "reputation" in modules:
@@ -200,5 +225,6 @@ def run_scan(
 
     metadata.files_scanned = files_scanned["count"]
     metadata.finished_at = datetime.now(timezone.utc).isoformat()
+    scan_cache.save()
 
     return ScanResult(metadata, all_findings, module_errors)

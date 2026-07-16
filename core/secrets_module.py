@@ -12,8 +12,15 @@ Emits a flat list of core.models.Finding objects, which the orchestrator
 """
 from __future__ import annotations
 
+import base64
+import json
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
 
+from core.cache_utils import ScanCache, sha256_file
+from core.config_intel import extract_interesting_settings
 from core.entropy import find_high_entropy_candidates
 from core.fs_walk import (
     check_permissive_permissions,
@@ -24,6 +31,18 @@ from core.fs_walk import (
 from core.models import Finding, Severity, redact
 from core.pe_utils import extract_strings_from_bytes, is_pe_file, parse_pe
 from core.rules import Rule, load_rules
+
+JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
+DB_URI_RE = re.compile(
+    r"\b(?P<scheme>postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|mssql|sqlserver|jdbc:[a-z0-9]+)://[^\s'\"<>]+",
+    re.IGNORECASE,
+)
+CORRELATION_KEYS = {
+    "username": ("user", "username", "uid", "login"),
+    "password": ("pass", "password", "pwd"),
+    "endpoint": ("host", "endpoint", "url", "server", "base_url"),
+    "api_key": ("api_key", "apikey", "token", "secret", "client_secret", "key"),
+}
 
 # Placeholder/test values that regex rules commonly false-positive on.
 # Evidence matching these (case-insensitive) is downgraded to Low confidence
@@ -115,7 +134,128 @@ def _extract_context(lines: list[str], line_no: int, radius: int = 2, max_line_l
 def _confidence_for(evidence: str, base: str = "Medium") -> str:
     if _looks_like_placeholder(evidence):
         return "Low"
+    score = 1
+    value = _isolate_value(evidence)
+    if len(value) >= 24:
+        score += 1
+    if any(c.isdigit() for c in value) and any(c.isalpha() for c in value):
+        score += 1
+    if re.search(r"(?i)(secret|token|password|api[_-]?key|client[_-]?secret)", evidence):
+        score += 1
+    if score >= 4:
+        return "High"
     return base
+
+
+def _b64url_json(part: str) -> dict:
+    padded = part + "=" * (-len(part) % 4)
+    return json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8", errors="ignore"))
+
+
+def _jwt_findings(content: str, file_path: str, lines: list[str]) -> list[Finding]:
+    findings = []
+    for match in JWT_RE.finditer(content):
+        token = match.group(0)
+        try:
+            header = _b64url_json(token.split(".")[0])
+            payload = _b64url_json(token.split(".")[1])
+        except Exception:
+            continue
+        line_no = content.count("\n", 0, match.start()) + 1
+        interesting = {k: payload.get(k) for k in ("exp", "iss", "aud", "roles", "role", "scp") if k in payload}
+        findings.append(Finding(
+            module="secrets",
+            rule_id="jwt-token",
+            title="JWT token embedded in file",
+            severity=Severity.HIGH if "exp" in payload else Severity.MEDIUM,
+            file_path=file_path,
+            evidence=redact(token),
+            description="A JSON Web Token was found and decoded successfully. Embedded JWTs can grant direct access until expiry and may expose issuer, audience, and role claims.",
+            remediation="Remove embedded JWTs, rotate/revoke the token, and issue short-lived tokens at runtime through an authenticated flow.",
+            poc=_build_text_poc(file_path, line_no, "jwt-token", token),
+            line_number=line_no,
+            tags=["jwt", "token", "auth"],
+            confidence="High",
+            extra={"jwt": {"header": header, "payload": payload, "alg": header.get("alg"), **interesting}, "context": _extract_context(lines, line_no)},
+        ))
+    return findings
+
+
+def _parse_db_uri(uri: str) -> dict:
+    parsed = urlparse(uri)
+    query = parse_qs(parsed.query)
+    return {
+        "scheme": parsed.scheme,
+        "host": parsed.hostname,
+        "port": parsed.port,
+        "database": parsed.path.lstrip("/") or None,
+        "username": unquote(parsed.username) if parsed.username else None,
+        "password": unquote(parsed.password) if parsed.password else None,
+        "ssl": query.get("sslmode", query.get("ssl", query.get("encrypt", [None])))[0],
+    }
+
+
+def _db_uri_findings(content: str, file_path: str, lines: list[str]) -> list[Finding]:
+    findings = []
+    for match in DB_URI_RE.finditer(content):
+        uri = match.group(0).rstrip("),.;")
+        try:
+            parsed = _parse_db_uri(uri)
+        except Exception:
+            continue
+        line_no = content.count("\n", 0, match.start()) + 1
+        findings.append(Finding(
+            module="secrets",
+            rule_id="database-connection-string",
+            title="Database connection string exposed",
+            severity=Severity.HIGH if parsed.get("password") else Severity.MEDIUM,
+            file_path=file_path,
+            evidence=redact(uri),
+            description="A database connection string was found and parsed into host, port, database, username, password, and SSL-related fields.",
+            remediation="Move database connection settings to a secret store, rotate exposed credentials, and require TLS for database connections.",
+            poc=_build_text_poc(file_path, line_no, "database-connection-string", uri),
+            line_number=line_no,
+            tags=["database", "connection-string", "credential"],
+            confidence="High" if parsed.get("password") and parsed.get("host") else "Medium",
+            extra={"database_connection": parsed, "context": _extract_context(lines, line_no)},
+        ))
+    return findings
+
+
+def _correlate_related_secrets(findings: list[Finding]) -> list[Finding]:
+    by_file_line: dict[tuple[str, int], dict[str, Finding]] = {}
+    for f in findings:
+        if f.module != "secrets" or not f.line_number:
+            continue
+        if f.rule_id in {"database-connection-string", "jwt-token", "correlated-secret-bundle"}:
+            continue
+        blob = f"{f.rule_id} {f.title} {f.evidence}".lower()
+        for kind, markers in CORRELATION_KEYS.items():
+            if any(m in blob for m in markers):
+                by_file_line.setdefault((f.file_path, f.line_number), {})[kind] = f
+    correlated = []
+    consumed = set()
+    for (_file, _line), parts in by_file_line.items():
+        if len(parts) < 2 or not ({"password", "api_key"} & set(parts)):
+            continue
+        seed = next(iter(parts.values()))
+        evidence = "; ".join(f"{kind}={redact(f.evidence)}" for kind, f in parts.items())
+        correlated.append(Finding(
+            module="secrets",
+            rule_id="correlated-secret-bundle",
+            title="Correlated credential bundle exposed",
+            severity=Severity.HIGH,
+            file_path=seed.file_path,
+            evidence=evidence,
+            description="Multiple related credential indicators appear together and are reported as one correlated secret bundle.",
+            remediation="Rotate all related credentials together and move the complete connection profile into a managed secrets store.",
+            line_number=seed.line_number,
+            tags=["credential", "correlated", "secret-bundle"],
+            confidence="High",
+            extra={"components": sorted(parts.keys()), "context": seed.extra.get("context", "")},
+        ))
+        consumed.update(f.fingerprint() for f in parts.values())
+    return [f for f in findings if f.fingerprint() not in consumed] + correlated
 
 
 def _build_text_poc(file_path: str, line_no: int, rule_id: str, evidence_raw: str) -> str:
@@ -241,6 +381,9 @@ def _scan_text_content(
                 )
             )
 
+    findings.extend(_jwt_findings(content, file_path, lines))
+    findings.extend(_db_uri_findings(content, file_path, lines))
+
     # --- Entropy-based catch-all for secrets with no known pattern ---
     if enable_entropy:
         for candidate, offset in find_high_entropy_candidates(content):
@@ -278,6 +421,28 @@ def _scan_text_content(
                 )
             )
 
+    return findings
+
+
+def _config_intel_findings(path: Path) -> list[Finding]:
+    findings = []
+    for setting in extract_interesting_settings(path):
+        value = setting["value"]
+        key = setting["key"]
+        sensitive = any(t in setting["tags"] for t in ("auth-setting", "database-setting"))
+        findings.append(Finding(
+            module="secrets",
+            rule_id="config-intelligence-setting",
+            title=f"{setting['format']} configuration exposes security-relevant setting",
+            severity=Severity.MEDIUM if sensitive else Severity.LOW,
+            file_path=str(path),
+            evidence=f"{key}={redact(str(value)) if sensitive else value}",
+            description="Warden parsed this configuration file and identified an authentication, database, logging, TLS, or debug setting.",
+            remediation="Review this setting for production safety. Keep secrets out of config files, disable debug mode, enforce TLS verification, and avoid verbose sensitive logging.",
+            tags=["config-intelligence"] + setting["tags"],
+            confidence="Medium",
+            extra={"config": setting},
+        ))
     return findings
 
 
@@ -374,6 +539,8 @@ def run(
     single_file: str | Path | None = None,
     progress_callback=None,
     error_callback=None,
+    scan_cache: ScanCache | None = None,
+    max_workers: int = 1,
 ) -> list[Finding]:
     """
     Entry point for Module 1. Walks `target_dir`, scans every eligible file,
@@ -407,7 +574,9 @@ def run(
                 seen_fingerprints.add(fp)
                 all_findings.append(f)
 
-    for path in iter_target_files(target_dir, single_file=single_file):
+    def _scan_path(path: Path) -> tuple[Path, list[Finding]]:
+        if scan_cache and scan_cache.unchanged(path, "secrets"):
+            return path, []
         if progress_callback:
             progress_callback(str(path))
 
@@ -419,6 +588,7 @@ def run(
                 content = read_text_safely(path)
                 if content:
                     file_findings = _scan_text_content(content, str(path), rules, enable_entropy)
+                    file_findings.extend(_config_intel_findings(path))
 
             elif kind == "pe" and scan_pe_strings and is_pe_file(path):
                 file_findings = _scan_pe_strings(path, rules, enable_entropy)
@@ -433,17 +603,33 @@ def run(
                     content = ""
                 if content:
                     file_findings = _scan_text_content(content, str(path), rules, enable_entropy)
+                    file_findings.extend(_config_intel_findings(path))
                     for f in file_findings:
                         f.tags = list(set(f.tags + ["local-database"]))
 
             if file_findings:
-                _add(file_findings)
-                _add(_flag_permissions(path, file_findings))
+                file_findings = _correlate_related_secrets(file_findings)
+                file_findings.extend(_flag_permissions(path, file_findings))
+            if scan_cache:
+                scan_cache.mark_scanned(path, "secrets", sha256_file(path))
+            return path, file_findings
         except Exception as e:
             # One malformed/unreadable file must never wipe out every
             # finding already collected from the rest of the scan.
             if error_callback:
                 error_callback(f"secrets: skipped '{path}' after error: {e}")
-            continue
+            return path, []
+
+    paths = list(iter_target_files(target_dir, single_file=single_file))
+    if max_workers and max_workers > 1 and len(paths) > 1:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [pool.submit(_scan_path, path) for path in paths]
+            for future in as_completed(futures):
+                _path, file_findings = future.result()
+                _add(file_findings)
+    else:
+        for path in paths:
+            _path, file_findings = _scan_path(path)
+            _add(file_findings)
 
     return all_findings

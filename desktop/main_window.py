@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import json
+import sys
 import traceback
 import webbrowser
 from datetime import datetime, timezone
@@ -34,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.logging_config import get_logger
+from core.finding_grouping import group_findings
 from core.models import Finding
 from report.html_export import generate_html_report
 
@@ -44,7 +46,15 @@ from desktop.theme import SEVERITY_COLORS
 
 logger = get_logger("desktop.main_window")
 
-REPORTS_DIR = Path.home() / ".warden" / "reports"
+
+def _application_root() -> Path:
+    """Return the installed app folder, or the project root when running from source."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+REPORTS_DIR = _application_root() / "reports"
 
 COMMON_MODULES = [
     ("secrets", "Secrets & Config Exposure"),
@@ -237,9 +247,12 @@ class MainWindow(QMainWindow):
         self.opt_pestrings.setChecked(True)
         self.opt_osslsigncode = QCheckBox("Use osslsigncode for deep signature verification (if installed)")
         self.opt_osslsigncode.setChecked(True)
+        self.opt_include_inventory = QCheckBox("Show inventory/pass findings in Linux/macOS scans")
+        self.opt_include_inventory.setChecked(True)
         og_layout.addWidget(self.opt_entropy)
         og_layout.addWidget(self.opt_pestrings)
         og_layout.addWidget(self.opt_osslsigncode)
+        og_layout.addWidget(self.opt_include_inventory)
 
         services_label = QLabel("Services file (optional — sc query / wmic output):")
         services_label.setObjectName("subheading")
@@ -406,9 +419,9 @@ class MainWindow(QMainWindow):
 
         # -- Findings table --------------------------------------------
         self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Severity", "Title", "File", "Line", "Module"])
+        self.table.setHorizontalHeaderLabels(["Severity", "Title", "Affected", "Module", "Top Location"])
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
@@ -438,6 +451,7 @@ class MainWindow(QMainWindow):
         self.opt_entropy.setChecked(self.settings.enable_entropy)
         self.opt_pestrings.setChecked(self.settings.scan_pe_strings)
         self.opt_osslsigncode.setChecked(self.settings.use_osslsigncode)
+        self.opt_include_inventory.setChecked(self.settings.include_inventory)
         selected = set(self.settings.selected_modules)
         for module_id, cb in self._module_checks.items():
             cb.setChecked(module_id in selected)
@@ -451,6 +465,7 @@ class MainWindow(QMainWindow):
         self.settings.enable_entropy = self.opt_entropy.isChecked()
         self.settings.scan_pe_strings = self.opt_pestrings.isChecked()
         self.settings.use_osslsigncode = self.opt_osslsigncode.isChecked()
+        self.settings.include_inventory = self.opt_include_inventory.isChecked()
         self.settings.selected_modules = [m for m, cb in self._module_checks.items() if cb.isChecked()]
         # Only overwrite the saved API key if the analyst actually typed a
         # new one this session — otherwise leave the previously saved key
@@ -554,6 +569,7 @@ class MainWindow(QMainWindow):
             "enable_entropy": self.opt_entropy.isChecked(),
             "scan_pe_strings": self.opt_pestrings.isChecked(),
             "use_osslsigncode": self.opt_osslsigncode.isChecked(),
+            "include_inventory": self.opt_include_inventory.isChecked(),
             "services_file": services_file,
             "vt_api_key": self.vt_api_key_input.text().strip() or self.settings.vt_api_key,
             "vt_include_clean": self.opt_vt_include_clean.isChecked(),
@@ -707,24 +723,30 @@ class MainWindow(QMainWindow):
     # Findings table
     # ------------------------------------------------------------------
     def _populate_table(self, findings: list[Finding]) -> None:
+        grouped = group_findings(findings)
         self.table.setRowCount(0)
-        self.table.setRowCount(len(findings))
-        for row, f in enumerate(findings):
-            sev_item = QTableWidgetItem(f.severity.value)
-            color = QColor(SEVERITY_COLORS.get(f.severity.value, "#8b8f96"))
+        self.table.setRowCount(len(grouped))
+        for row, f in enumerate(grouped):
+            sev_item = QTableWidgetItem(f["severity"])
+            color = QColor(SEVERITY_COLORS.get(f["severity"], "#8b8f96"))
             sev_item.setForeground(color)
             sev_item.setData(Qt.ItemDataRole.UserRole, f)
 
-            title_item = QTableWidgetItem(f.title)
-            file_item = QTableWidgetItem(f.file_path)
-            line_item = QTableWidgetItem(str(f.line_number) if f.line_number else "")
-            module_item = QTableWidgetItem(f.module)
+            title = f["title"]
+            affected = int(f.get("affected_count") or len(f.get("locations", [])) or 1)
+            if affected > 1:
+                title = f"{title} ({affected} locations)"
+            title_item = QTableWidgetItem(title)
+            affected_item = QTableWidgetItem(str(affected))
+            module_item = QTableWidgetItem(f["module"])
+            top_location = (f.get("locations") or [f.get("file_path", "")])[0]
+            file_item = QTableWidgetItem(top_location)
 
             self.table.setItem(row, 0, sev_item)
             self.table.setItem(row, 1, title_item)
-            self.table.setItem(row, 2, file_item)
-            self.table.setItem(row, 3, line_item)
-            self.table.setItem(row, 4, module_item)
+            self.table.setItem(row, 2, affected_item)
+            self.table.setItem(row, 3, module_item)
+            self.table.setItem(row, 4, file_item)
 
         self.table.resizeRowsToContents()
 
@@ -734,7 +756,7 @@ class MainWindow(QMainWindow):
         for row in range(self.table.rowCount()):
             sev_item = self.table.item(row, 0)
             title_item = self.table.item(row, 1)
-            file_item = self.table.item(row, 2)
+            file_item = self.table.item(row, 4)
             if sev_item is None:
                 continue
             severity_match = severity == "All Severities" or sev_item.text() == severity

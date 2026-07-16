@@ -78,6 +78,7 @@ class ScanWorker(QObject):
                 vt_api_key=params.get("vt_api_key") or None,
                 vt_include_clean=params.get("vt_include_clean", False),
                 vt_upload_unknown=params.get("vt_upload_unknown", False),
+                include_inventory=params.get("include_inventory", True),
                 progress_callback=progress_cb,
                 error_callback=error_cb,
             )

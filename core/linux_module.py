@@ -26,6 +26,7 @@ Windows-only module.
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 
 from core import secrets_module
@@ -48,6 +49,7 @@ from core.models import Finding, Severity
 URL_RE = re.compile(r"https?://[^\s\"'<>]{4,300}")
 UPDATE_KEYWORDS = ("update", "autoupdate", "upgrade", "appimageupdate")
 TRUST_KEYWORDS = ("gpg", "signature", "sha256sum", "verify", "checksum", "publickey")
+INVENTORY_TAG = "inventory"
 
 STATUS_SEVERITY = {
     "Pass": Severity.INFO,
@@ -97,6 +99,7 @@ def _application_discovery(target_dir: Path, elf_files: list[Path]) -> list[Find
                 description="A .desktop launcher entry describes how this application is installed and launched.",
                 recommendation="Confirm the Exec= command does not invoke the binary with unsafe world-writable paths.",
                 file_path=str(p),
+                tags=[INVENTORY_TAG],
             ))
         elif name == "control" and "DEBIAN" in p.parts:
             content = read_text_safely(p)
@@ -106,6 +109,7 @@ def _application_discovery(target_dir: Path, elf_files: list[Path]) -> list[Find
                 description="Debian package control file identifies package name, version, and maintainer.",
                 recommendation="Verify the declared version matches the actual installed binary version.",
                 file_path=str(p),
+                tags=[INVENTORY_TAG],
             ))
         elif p.suffix == ".spec":
             content = read_text_safely(p)
@@ -115,6 +119,34 @@ def _application_discovery(target_dir: Path, elf_files: list[Path]) -> list[Find
                 description="RPM spec file identifies package name and version metadata.",
                 recommendation="Verify the declared version matches the actual installed binary version.",
                 file_path=str(p),
+                tags=[INVENTORY_TAG],
+            ))
+        elif name.lower().endswith(".appimage") or p.suffix.lower() == ".appimage":
+            findings.append(_mk(
+                "Application Discovery", "AppImage Package Detected", "Info",
+                evidence=str(p),
+                description="An AppImage package artifact was found in the application tree.",
+                recommendation="Extract and review the AppImage runtime, AppRun launcher, update information, and bundled libraries.",
+                file_path=str(p),
+                tags=[INVENTORY_TAG, "appimage"],
+            ))
+        elif name in {"metadata", "metadata.json"} and ("flatpak" in [part.lower() for part in p.parts] or p.parent.name.lower() in {"flatpak", "metainfo"}):
+            findings.append(_mk(
+                "Application Discovery", "Flatpak Metadata Detected", "Info",
+                evidence=read_text_safely(p)[:500],
+                description="Flatpak metadata was found in the application tree.",
+                recommendation="Review Flatpak permissions, filesystem access, sockets, and finish-args for least privilege.",
+                file_path=str(p),
+                tags=[INVENTORY_TAG, "flatpak"],
+            ))
+        elif name == "snap.yaml" or ".snap" in p.suffixes:
+            findings.append(_mk(
+                "Application Discovery", "Snap Metadata Detected", "Info",
+                evidence=read_text_safely(p)[:500],
+                description="Snap package metadata was found in the application tree.",
+                recommendation="Review plugs/interfaces, confinement mode, hooks, and service commands for least privilege.",
+                file_path=str(p),
+                tags=[INVENTORY_TAG, "snap"],
             ))
 
     findings.append(_mk(
@@ -124,6 +156,7 @@ def _application_discovery(target_dir: Path, elf_files: list[Path]) -> list[Find
         description="Inventory of all ELF binaries/libraries found in the application tree.",
         recommendation="Confirm every shipped binary is expected/signed by the vendor's build process.",
         file_path=str(target_dir),
+        tags=[INVENTORY_TAG],
     ))
     return findings
 
@@ -143,6 +176,7 @@ def _binary_analysis(elf_files: list[Path]) -> list[Finding]:
             description="Basic ELF header facts for this binary.",
             recommendation="No action needed; informational.",
             file_path=str(path),
+            tags=[INVENTORY_TAG],
         ))
 
         if info.elf_type == "Executable" and not info.is_pie:
@@ -170,6 +204,56 @@ def _binary_analysis(elf_files: list[Path]) -> list[Finding]:
                 description="A hardcoded RPATH/RUNPATH can enable library-hijacking if the referenced directory is writable.",
                 recommendation="Remove hardcoded RPATH/RUNPATH or ensure referenced directories are not writable by unprivileged users.",
                 file_path=str(path),
+            ))
+
+        if info.relro in {"none", "partial"}:
+            findings.append(_mk(
+                "Binary Analysis", "RELRO Not Fully Enabled", "Fail" if info.relro == "none" else "Warning",
+                evidence=f"RELRO={info.relro}",
+                description="The binary does not appear to use full RELRO, leaving GOT/relocation structures more writable than necessary.",
+                recommendation="Rebuild with full RELRO using linker flags such as -Wl,-z,relro,-z,now.",
+                file_path=str(path),
+                severity=Severity.MEDIUM if info.relro == "none" else Severity.LOW,
+                tags=["hardening"],
+            ))
+
+        if info.has_stack_canary is False:
+            findings.append(_mk(
+                "Binary Analysis", "Stack Canary Not Detected", "Warning",
+                evidence="__stack_chk_fail symbol not found",
+                description="No stack canary reference was detected in symbols, which may indicate missing stack-smashing protection.",
+                recommendation="Rebuild security-sensitive C/C++ code with stack protector options such as -fstack-protector-strong.",
+                file_path=str(path),
+                tags=["hardening"],
+            ))
+
+        if info.fortify_symbols:
+            findings.append(_mk(
+                "Binary Analysis", "Fortify Source Symbols Detected", "Info",
+                evidence=", ".join(info.fortify_symbols[:20]),
+                description="FORTIFY_SOURCE-style checked libc wrapper symbols were detected.",
+                recommendation="Keep _FORTIFY_SOURCE enabled for optimized release builds.",
+                file_path=str(path),
+                tags=[INVENTORY_TAG, "hardening"],
+            ))
+        elif info.has_stack_canary is not None:
+            findings.append(_mk(
+                "Binary Analysis", "Fortify Source Symbols Not Detected", "Warning",
+                evidence="No *_chk symbols found",
+                description="No FORTIFY_SOURCE checked libc wrapper symbols were detected.",
+                recommendation="Build with optimization and _FORTIFY_SOURCE=2 or stronger where compatible.",
+                file_path=str(path),
+                tags=["hardening"],
+            ))
+
+        if info.stripped is False:
+            findings.append(_mk(
+                "Binary Analysis", "Debug Symbols Not Stripped", "Warning",
+                evidence=".symtab section present",
+                description="The binary appears to include a full symbol table, making reverse engineering easier and possibly exposing internal function names.",
+                recommendation="Strip release binaries or split debug symbols into a separate protected package.",
+                file_path=str(path),
+                tags=["recon", "symbols"],
             ))
 
         try:
@@ -229,6 +313,7 @@ def _config_and_secrets(target_dir: Path, rules_dir, enable_entropy: bool, singl
             description="Inventory of configuration files parsed for this assessment.",
             recommendation="Review configuration files for insecure defaults (debug mode, permissive CORS, verbose logging).",
             file_path=str(target_dir),
+            tags=[INVENTORY_TAG],
         ))
     return findings
 
@@ -342,6 +427,20 @@ def _file_permission_analysis(target_dir: Path) -> list[Finding]:
                     recommendation="Restrict permissions (chmod o-w) so only the application's own user can write to it.",
                     file_path=str(p), severity=Severity.MEDIUM,
                 ))
+        try:
+            mode = p.stat().st_mode
+        except OSError:
+            continue
+        if mode & 0o6000:
+            findings.append(_mk(
+                "File Permission Analysis", "SUID/SGID File Detected", "Fail",
+                evidence=f"mode={oct(mode & 0o7777)}",
+                description="A file has SUID and/or SGID bits set, which can elevate execution privileges if the file is executable.",
+                recommendation="Remove SUID/SGID bits unless strictly required; audit the binary/script for privilege-escalation paths.",
+                file_path=str(p),
+                severity=Severity.HIGH,
+                tags=["permissions", "privilege"],
+            ))
     return findings
 
 
@@ -358,7 +457,52 @@ def _third_party_libraries(elf_files: list[Path]) -> list[Finding]:
             description=f"{len(all_libs)} unique shared libraries (DT_NEEDED) are linked across discovered ELF binaries.",
             recommendation="Cross-reference these libraries and their bundled versions against known CVEs.",
             file_path="",
+            tags=[INVENTORY_TAG, "sbom"],
         ))
+    versioned = sorted({lib for lib in all_libs if re.search(r"\.so(?:\.\d+)+$", lib)})
+    if versioned:
+        findings.append(_mk(
+            "Third-Party Library Enumeration", "Versioned Library Inventory", "Info",
+            evidence=", ".join(versioned[:50]),
+            description="Versioned shared-library names were extracted for SBOM/CVE correlation.",
+            recommendation="Feed this inventory into your dependency/CVE workflow and verify bundled library versions are patched.",
+            file_path="",
+            tags=[INVENTORY_TAG, "sbom", "cve"],
+        ))
+    return findings
+
+
+def _unsafe_service_exec_findings(target_dir: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    for p in iter_all_files(target_dir):
+        if p.suffix != ".service":
+            continue
+        content = read_text_safely(p)
+        for line in content.splitlines():
+            if not line.strip().lower().startswith(("execstart=", "execstop=", "execreload=")):
+                continue
+            key, _, cmd = line.partition("=")
+            raw_cmd = cmd.strip()
+            if not raw_cmd:
+                continue
+            first = raw_cmd.split()[0].lstrip("-+!@")
+            unsafe = []
+            if first.startswith("/tmp/") or first.startswith("/var/tmp/") or first.startswith("/dev/shm/"):
+                unsafe.append("writable temp path")
+            if first.endswith((".sh", ".py", ".pl", ".rb")):
+                unsafe.append("script interpreter target")
+            if "$" in raw_cmd or "`" in raw_cmd or "%h" in raw_cmd:
+                unsafe.append("variable/specifier expansion")
+            if unsafe:
+                findings.append(_mk(
+                    "Startup", "Unsafe Service Exec Path", "Warning",
+                    evidence=f"{key}={raw_cmd} ({', '.join(unsafe)})",
+                    description="A systemd service command uses a path or expansion pattern that should be reviewed for tampering or privilege-boundary risk.",
+                    recommendation="Use absolute root-owned executable paths, avoid writable directories and shell expansion, and lock down service file permissions.",
+                    file_path=str(p),
+                    severity=Severity.MEDIUM if "writable temp path" in unsafe else Severity.LOW,
+                    tags=["startup", "systemd"],
+                ))
     return findings
 
 
@@ -399,6 +543,7 @@ def _startup_and_scheduling(target_dir: Path) -> list[Finding]:
                 description="A systemd service unit shipped by this application controls its startup behavior.",
                 recommendation="Verify the unit does not run as root unless strictly required, and that ExecStart paths are not writable by other users.",
                 file_path=str(p),
+                tags=[INVENTORY_TAG],
             ))
             user_match = re.search(r"^\s*User\s*=\s*(\S+)", content, re.MULTILINE)
             runs_as_root = (user_match is None) or (user_match.group(1) == "root")
@@ -420,8 +565,38 @@ def _startup_and_scheduling(target_dir: Path) -> list[Finding]:
                     description="A cron schedule file is bundled with the application.",
                     recommendation="Confirm the scheduled command path is not writable by unprivileged users.",
                     file_path=str(p),
+                    tags=[INVENTORY_TAG],
                 ))
     return findings
+
+
+def _tool_gap_findings(target_dir: Path) -> list[Finding]:
+    findings: list[Finding] = []
+    if shutil.which("readelf") is None:
+        findings.append(_mk(
+            "Binary Analysis", "readelf Not Available", "Info",
+            evidence="readelf was not found on PATH",
+            description=(
+                "Linux ELF header parsing still runs, but DT_NEEDED libraries, RPATH/RUNPATH, "
+                "and GNU_STACK/NX stack details require readelf."
+            ),
+            recommendation="Install binutils/readelf on the analyst workstation for deeper Linux binary analysis.",
+            file_path=str(target_dir),
+            confidence="High",
+            tags=["tooling-gap"],
+        ))
+    return findings
+
+
+def _single_file_discovery(single_file: Path, elf_files: list[Path]) -> list[Finding]:
+    return [_mk(
+        "Application Discovery", "Single File Scope",
+        "Info" if elf_files else "Warning",
+        evidence=f"Single-file Linux scan target: {single_file}",
+        description="The Linux module is restricted to the selected file; folder-level package, startup, certificate, and permission inventory is skipped.",
+        recommendation="Run a folder scan against the extracted application tree for full Linux thick-client coverage.",
+        file_path=str(single_file),
+    )]
 
 
 def run(
@@ -431,6 +606,7 @@ def run(
     single_file: str | Path | None = None,
     progress_callback=None,
     error_callback=None,
+    include_inventory: bool = True,
 ) -> list[Finding]:
     """Entry point for the Linux thick-client static assessment module."""
     target_dir = Path(target_dir)
@@ -442,18 +618,36 @@ def run(
             progress_callback(str(p))
 
     findings: list[Finding] = []
-    try:
-        findings.extend(_application_discovery(target_dir, elf_files))
-        findings.extend(_binary_analysis(elf_files))
-        findings.extend(_config_and_secrets(target_dir, rules_dir, enable_entropy, single_file))
-        findings.extend(_certificate_analysis(target_dir))
-        findings.extend(_update_mechanism_analysis(target_dir, elf_files))
-        findings.extend(_file_permission_analysis(target_dir))
-        findings.extend(_third_party_libraries(elf_files))
-        findings.extend(_startup_and_scheduling(target_dir))
-        findings.extend(_network_artifacts(findings))
-    except Exception as e:
-        if error_callback:
-            error_callback(f"linux module: {e}")
+    findings.extend(_tool_gap_findings(target_dir))
 
+    def _phase(name: str, func):
+        try:
+            findings.extend(func())
+        except Exception as e:
+            if error_callback:
+                error_callback(f"linux module {name} phase failed: {e}")
+
+    if single_file is not None:
+        _phase("application-discovery", lambda: _single_file_discovery(single_file, elf_files))
+        _phase("binary-analysis", lambda: _binary_analysis(elf_files))
+        _phase("secrets", lambda: _config_and_secrets(target_dir, rules_dir, enable_entropy, single_file))
+        _phase("update-mechanism", lambda: _update_mechanism_analysis(target_dir, elf_files))
+        _phase("network-artifacts", lambda: _network_artifacts(findings))
+        if not include_inventory:
+            findings = [f for f in findings if INVENTORY_TAG not in f.tags]
+        return findings
+
+    _phase("application-discovery", lambda: _application_discovery(target_dir, elf_files))
+    _phase("binary-analysis", lambda: _binary_analysis(elf_files))
+    _phase("secrets", lambda: _config_and_secrets(target_dir, rules_dir, enable_entropy, single_file))
+    _phase("certificate-analysis", lambda: _certificate_analysis(target_dir))
+    _phase("update-mechanism", lambda: _update_mechanism_analysis(target_dir, elf_files))
+    _phase("file-permissions", lambda: _file_permission_analysis(target_dir))
+    _phase("third-party-libraries", lambda: _third_party_libraries(elf_files))
+    _phase("startup", lambda: _startup_and_scheduling(target_dir))
+    _phase("unsafe-service-exec", lambda: _unsafe_service_exec_findings(target_dir))
+    _phase("network-artifacts", lambda: _network_artifacts(findings))
+
+    if not include_inventory:
+        findings = [f for f in findings if INVENTORY_TAG not in f.tags]
     return findings

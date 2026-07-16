@@ -45,6 +45,14 @@ binary) and it walks every file, running whichever modules you select:
 | macOS Thick-Client Assessment | macOS | Mach-O/code-signing, LaunchAgents/Daemons, entitlements, Keychain usage |
 | VirusTotal Reputation Check | All | Cross-references binary hashes against VirusTotal (opt-in, hash-only by default) |
 
+Recent intelligence additions include JWT decoding, database connection-string
+parsing, correlated credential bundles, structured JSON/XML/YAML/INI/TOML/
+SQLite/plist configuration parsing, custom YARA rules, extracted RE artifacts
+(URLs, IPs, domains, registry keys, mutexes, GUIDs, named pipes and strings),
+crypto/framework detection, embedded manifest privilege review, imported-DLL
+dependency graphs, richer certificate-chain/timestamp/publisher checks, an
+executive report dashboard, and optional SHA-256 incremental scan caching.
+
 Two interfaces, one engine underneath both — the desktop app and the CLI
 both call the same `core/scanner.py::run_scan()` and produce the same
 self-contained HTML report (plus optional JSON) with unified
@@ -163,6 +171,18 @@ remembered between runs via the OS's native settings storage — the registry
 on Windows, a plist on macOS, a config file on Linux.
 
 ## CLI
+
+Useful advanced flags:
+
+```bash
+python cli.py scan ./target --module secrets --module re_exposure --incremental --max-workers 4
+python cli.py scan ./target --module re_exposure --yara-rules-dir ./rules/yara
+python cli.py scan ./target --plugins-dir ./plugins
+```
+
+Python detector plugins are loaded from `--plugins-dir`. Each `*.py` file may
+expose `scan_file(path) -> list[core.models.Finding]`. YARA rules can live in
+`rules/yara` by default or in the directory passed via `--yara-rules-dir`.
 
 ```bash
 python cli.py scan TARGET [OPTIONS]

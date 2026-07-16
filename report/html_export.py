@@ -11,6 +11,7 @@ import base64
 import html
 from pathlib import Path
 
+from core.finding_grouping import group_finding_dicts
 from core.scanner import ScanResult
 
 SEVERITY_ORDER = ["Critical", "High", "Medium", "Low", "Info"]
@@ -30,6 +31,29 @@ MODULE_LABELS = {
     "re_exposure": "RE / Anti-Tamper Exposure",
     "linux": "Linux Thick-Client Assessment",
     "macos": "macOS Thick-Client Assessment",
+}
+
+MITRE_BY_TAG = {
+    "credential": "T1552 Unsecured Credentials",
+    "jwt": "T1552 Unsecured Credentials",
+    "database": "T1005 Data from Local System",
+    "dll": "T1574 Hijack Execution Flow",
+    "signature": "T1553 Subvert Trust Controls",
+    "auto-update": "T1195 Supply Chain Compromise",
+    "anti-debug": "T1497 Virtualization/Sandbox Evasion",
+    "registry-key": "T1112 Modify Registry",
+    "named-pipe": "T1559 Inter-Process Communication",
+}
+
+CWE_BY_TAG = {
+    "credential": "CWE-798 Hard-coded Credentials",
+    "jwt": "CWE-522 Insufficiently Protected Credentials",
+    "database": "CWE-200 Exposure of Sensitive Information",
+    "weak-crypto": "CWE-327 Broken/Risky Cryptographic Algorithm",
+    "permissions": "CWE-732 Incorrect Permission Assignment",
+    "signature": "CWE-347 Improper Verification of Cryptographic Signature",
+    "debug-setting": "CWE-489 Active Debug Code",
+    "tls-setting": "CWE-295 Improper Certificate Validation",
 }
 
 
@@ -74,7 +98,7 @@ body {
   margin: 0;
   padding: 0;
 }
-.wrap { max-width: 1080px; margin: 0 auto; padding: 32px 28px 60px; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 32px 28px 60px; }
 
 header {
   border-bottom: 1px solid var(--border);
@@ -107,6 +131,23 @@ header .meta b { color: var(--text); font-weight: 600; }
 .risk-banner .risk-sub { color: var(--muted); font-size: 12px; margin-top: 3px; }
 
 .summary { display: flex; gap: 12px; margin-bottom: 22px; flex-wrap: wrap; }
+.section-title { color: var(--text); font-size: 13px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; margin: 24px 0 10px; }
+.dashboard-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+.dash-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+.dash-panel h2 { font-size: 12px; margin: 0 0 8px 0; color: var(--accent-soft); text-transform: uppercase; letter-spacing: 1px; }
+.dash-panel div { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+.heatmap { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.heat-cell {
+  min-height: 48px;
+  border-radius: 6px;
+  padding: 8px;
+  color: #ffffff;
+  font-weight: 700;
+  text-shadow: 0 1px 2px rgba(0,0,0,.55);
+  border: 1px solid rgba(255,255,255,.14);
+}
+.heat-cell .heat-label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; opacity: .96; }
+.heat-cell .heat-count { display: block; font-size: 18px; line-height: 1.2; margin-top: 2px; }
 .summary-card {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -263,6 +304,10 @@ ul.file-list li:last-child { border-bottom: none; }
 .confidence-low { opacity: 0.72; }
 footer { color: var(--muted); font-size: 11px; margin-top: 34px; border-top: 1px solid var(--border); padding-top: 16px; text-align: center; }
 .empty-state { text-align: center; color: var(--muted); padding: 40px 0; font-size: 13px; }
+@media (max-width: 760px) {
+  .dashboard-grid { grid-template-columns: 1fr; }
+  .heatmap { grid-template-columns: repeat(2, 1fr); }
+}
 """
 
 _SCRIPT = """
@@ -360,34 +405,50 @@ def _render_risk_banner(counts: dict) -> str:
 </div>"""
 
 
+def _mapped_values(f: dict, mapping: dict[str, str]) -> list[str]:
+    tags = set(f.get("tags", []))
+    values = [v for tag, v in mapping.items() if tag in tags]
+    return sorted(set(values))
+
+
+def _render_dashboard(findings: list[dict], counts: dict) -> str:
+    mitre = sorted({v for f in findings for v in _mapped_values(f, MITRE_BY_TAG)})
+    cwes = sorted({v for f in findings for v in _mapped_values(f, CWE_BY_TAG)})
+    attack_tags = sorted({t for f in findings for t in f.get("tags", []) if t in {
+        "credential", "database", "auto-update", "signature", "dependency-graph", "named-pipe", "registry-key", "url"
+    }})
+    heat_cells = "".join(
+        f'<div class="heat-cell" style="background:{SEVERITY_COLORS.get(sev, "#8b8f96")}">'
+        f'<span class="heat-label">{_esc(sev)}</span><span class="heat-count">{_esc(count)}</span></div>'
+        for sev, count in counts.items()
+    )
+    return f"""<div class="section-title">Assessment Overview</div>
+<div class="dashboard-grid">
+  <div class="dash-panel"><h2>Executive Summary</h2><div>{len(findings)} grouped finding(s). Highest active severity: {_esc(next((s for s, c in counts.items() if c), "None"))}.</div></div>
+  <div class="dash-panel"><h2>Risk Heatmap</h2><div class="heatmap">{heat_cells}</div></div>
+  <div class="dash-panel"><h2>Attack Surface</h2><div>{_esc(", ".join(attack_tags[:12]) or "No notable attack-surface tags detected.")}</div></div>
+  <div class="dash-panel"><h2>MITRE ATT&CK</h2><div>{_esc(", ".join(mitre[:10]) or "No mapping available for current tags.")}</div></div>
+  <div class="dash-panel"><h2>CWE</h2><div>{_esc(", ".join(cwes[:10]) or "No CWE mapping available for current tags.")}</div></div>
+  <div class="dash-panel"><h2>Remediation Focus</h2><div>Prioritize Critical/High findings, rotate exposed credentials, validate signing trust, review privilege manifests, and harden update/dependency surfaces.</div></div>
+</div>"""
+
+
 def _group_findings(findings: list[dict]) -> list[dict]:
-    """Collapse findings that represent the same vulnerability (same rule +
+    """Collapse findings that represent the same issue (same rule +
     title + severity) into one entry, listing every affected file path
     instead of repeating the whole finding block per file. Each location's
     code context (when the module supplied one) travels with it so the
     report can still show exactly where to look for every affected file,
     not just the first one."""
-    grouped: dict[tuple, dict] = {}
-    order: list[tuple] = []
-    for f in findings:
-        key = (f["module"], f["rule_id"], f["title"], f["severity"])
-        loc = f["file_path"] + (f" (line {f['line_number']})" if f.get("line_number") else "")
-        context = (f.get("extra") or {}).get("context") or ""
-        if key not in grouped:
-            grouped[key] = dict(f)
-            grouped[key]["locations"] = [loc]
-            grouped[key]["contexts"] = [context]
-            order.append(key)
-        else:
-            grouped[key]["locations"].append(loc)
-            grouped[key]["contexts"].append(context)
-    return [grouped[k] for k in order]
+    return group_finding_dicts(findings)
 
 
 def _render_finding(f: dict, idx: int) -> str:
     color = SEVERITY_COLORS.get(f["severity"], "#8b8f96")
     conf_class = "confidence-low" if f.get("confidence") == "Low" else ""
     tags_html = "".join(f"<span>{_esc(t)}</span>" for t in f.get("tags", []))
+    mitre_html = ", ".join(_mapped_values(f, MITRE_BY_TAG))
+    cwe_html = ", ".join(_mapped_values(f, CWE_BY_TAG))
     locations = f.get("locations", [f["file_path"]])
     contexts = f.get("contexts", [])
     affected_badge = f'<span class="affected-count">{len(locations)} affected file{"s" if len(locations) != 1 else ""}</span>'
@@ -448,7 +509,7 @@ def _render_finding(f: dict, idx: int) -> str:
     {affected_badge}
   </div>
   <div class="finding-meta">
-    rule: {_esc(f['rule_id'])} &middot; confidence: {_esc(f['confidence'])}
+    rule: {_esc(f['rule_id'])} &middot; confidence: {_esc(f['confidence'])}{' &middot; MITRE: ' + _esc(mitre_html) if mitre_html else ''}{' &middot; CWE: ' + _esc(cwe_html) if cwe_html else ''}
   </div>
   <div class="finding-section">
     <div class="label">Affected Files</div>
@@ -488,7 +549,7 @@ def _render_module_section(module: str, findings: list[dict], start_idx: int, op
   <summary>
     <span class="module-title">{_esc(label)}</span>
     <div class="module-sevdots">{dots}</div>
-    <span class="module-count">{len(findings)} vulnerabilit{"y" if len(findings) == 1 else "ies"}</span>
+    <span class="module-count">{len(findings)} grouped finding{"s" if len(findings) != 1 else ""}</span>
   </summary>
   <div class="module-body">{findings_html}</div>
 </details>"""
@@ -524,7 +585,7 @@ def generate_html_report(result: ScanResult, output_path: str | Path) -> Path:
     idx = 0
     for mod in module_order:
         mod_findings = by_module[mod]
-        open_default = _module_rank(mod) <= 1  # auto-expand Critical/High-containing modules
+        open_default = True
         sections_html.append(_render_module_section(mod, mod_findings, idx, open_default))
         idx += len(mod_findings)
 
@@ -546,15 +607,18 @@ def generate_html_report(result: ScanResult, output_path: str | Path) -> Path:
   <div class="meta">
     Target: <b>{_esc(meta.target_path)}</b><br>
     Scan started: {_esc(meta.started_at)} &middot; finished: {_esc(meta.finished_at)}<br>
-    Files scanned: <b>{_esc(meta.files_scanned)}</b> &middot; Unique vulnerabilities: <b>{len(findings)}</b> &middot; Tool version: {_esc(meta.tool_version)}
+    Files scanned: <b>{_esc(meta.files_scanned)}</b> &middot; Grouped findings: <b>{len(findings)}</b> &middot; Tool version: {_esc(meta.tool_version)}
   </div>
 </header>
 {_render_risk_banner(counts)}
+{_render_dashboard(findings, counts)}
+<div class="section-title">Severity Summary</div>
 {_render_summary(counts)}
 <div class="toolbar">
   <input type="search" id="searchBox" placeholder="Filter by title, rule, or file path\u2026">
-  <div class="count-label">Showing <span id="visibleCount">{len(findings)}</span> of {len(findings)} vulnerabilities &middot; click a severity card to filter</div>
+  <div class="count-label">Showing <span id="visibleCount">{len(findings)}</span> of {len(findings)} grouped findings &middot; click a severity card to filter</div>
 </div>
+<div class="section-title">Findings Detail</div>
 <div class="findings">
 {body_html}
 </div>

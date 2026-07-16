@@ -44,8 +44,15 @@ def cli():
 @click.option("--vt-include-clean", is_flag=True, help="Also emit an Info finding for binaries VirusTotal has seen and NOT flagged (default: only flagged binaries are reported).")
 @click.option("--vt-max-lookups", default=40, show_default=True, help="Cap on binaries checked per scan, to stay within VirusTotal rate/quota limits.")
 @click.option("--vt-upload-unknown", is_flag=True, help="DANGER: if a binary's hash isn't already known to VirusTotal, upload the file itself for analysis. Off by default — uploading proprietary/client binaries to a third party may violate engagement confidentiality. Only enable this if you've confirmed it's acceptable for this target.")
+@click.option("--incremental", is_flag=True, help="Use the SHA-256 scan cache and skip unchanged files where supported.")
+@click.option("--cache-file", default=None, type=click.Path(dir_okay=False), help="Override the incremental scan cache file.")
+@click.option("--yara-rules-dir", default=None, type=click.Path(exists=True, file_okay=False), help="Custom YARA rules directory for reverse-engineering scans.")
+@click.option("--plugins-dir", default=None, type=click.Path(exists=True, file_okay=False), help="Directory of Python detector plugins exposing scan_file(path).")
+@click.option("--max-workers", default=1, show_default=True, help="Worker threads for file-parallel modules.")
+@click.option("--hide-inventory", is_flag=True, help="Hide low-risk inventory/pass findings from Linux/macOS modules.")
 def scan(target, output, json_output, rules_dir, no_entropy, no_pe_strings, modules, services_file, no_osslsigncode,
-         vt_api_key, vt_include_clean, vt_max_lookups, vt_upload_unknown):
+         vt_api_key, vt_include_clean, vt_max_lookups, vt_upload_unknown, incremental, cache_file,
+         yara_rules_dir, plugins_dir, max_workers, hide_inventory):
     """Run a static security scan against TARGET directory."""
     selected_modules = list(modules) if modules else ["secrets"]
 
@@ -82,6 +89,12 @@ def scan(target, output, json_output, rules_dir, no_entropy, no_pe_strings, modu
             vt_include_clean=vt_include_clean,
             vt_max_lookups=vt_max_lookups,
             vt_upload_unknown=vt_upload_unknown,
+            incremental=incremental,
+            cache_file=cache_file,
+            yara_rules_dir=yara_rules_dir,
+            plugins_dir=plugins_dir,
+            max_workers=max_workers,
+            include_inventory=not hide_inventory,
             progress_callback=progress,
             error_callback=on_error,
         )

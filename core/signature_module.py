@@ -68,6 +68,8 @@ class CertSummary:
     signature_hash_algorithm: str
     self_signed: bool
     is_expired: bool
+    serial_number: str = ""
+    is_ca: bool = False
 
 
 @dataclass
@@ -79,6 +81,7 @@ class BinarySignatureInfo:
     osslsigncode_output: Optional[str] = None
     osslsigncode_verified: Optional[bool] = None  # None = tool unavailable
     osslsigncode_digest_mismatch: bool = False
+    timestamp_present: Optional[bool] = None
 
 
 def _cn_from_name(name: x509.Name) -> str:
@@ -138,10 +141,20 @@ def parse_signature(pe_path: Path) -> BinarySignatureInfo:
                 signature_hash_algorithm=cert.signature_hash_algorithm.name if cert.signature_hash_algorithm else "unknown",
                 self_signed=(subject_cn == issuer_cn),
                 is_expired=(now > not_after if not_after else False),
+                serial_number=hex(cert.serial_number),
+                is_ca=_is_ca_certificate(cert),
             )
         )
 
     return BinarySignatureInfo(path=str(pe_path), is_signed=True, certs=summaries)
+
+
+def _is_ca_certificate(cert: x509.Certificate) -> bool:
+    try:
+        bc = cert.extensions.get_extension_for_class(x509.BasicConstraints).value
+        return bool(bc.ca)
+    except Exception:
+        return False
 
 
 def run_osslsigncode_verify(pe_path: Path) -> tuple[Optional[bool], Optional[str], bool]:
@@ -194,6 +207,9 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
         sig_info.osslsigncode_verified = verified
         sig_info.osslsigncode_output = output
         sig_info.osslsigncode_digest_mismatch = digest_mismatch
+        if output:
+            lower = output.lower()
+            sig_info.timestamp_present = "timestamp" in lower and "no timestamp" not in lower
 
     if not sig_info.is_signed:
         findings.append(
@@ -263,6 +279,90 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
                 confidence="Low",
             )
         )
+
+    if sig_info.certs:
+        chain = " -> ".join(f"{c.subject_cn} (issuer: {c.issuer_cn})" for c in sig_info.certs)
+        chain_extra = [{
+            "subject_cn": c.subject_cn,
+            "issuer_cn": c.issuer_cn,
+            "not_valid_before": c.not_valid_before.isoformat() if c.not_valid_before else None,
+            "not_valid_after": c.not_valid_after.isoformat() if c.not_valid_after else None,
+            "signature_hash_algorithm": c.signature_hash_algorithm,
+            "self_signed": c.self_signed,
+            "is_expired": c.is_expired,
+            "serial_number": c.serial_number,
+            "is_ca": c.is_ca,
+        } for c in sig_info.certs]
+        findings.append(Finding(
+            module="signature",
+            rule_id="certificate-chain-summary",
+            title="Certificate chain extracted",
+            severity=Severity.INFO,
+            file_path=path,
+            evidence=chain,
+            description="Warden extracted the Authenticode certificate chain for publisher and trust review.",
+            remediation="Verify the leaf publisher is expected, the chain terminates at a trusted CA, and the certificate is appropriate for production code signing.",
+            tags=["signature", "certificate-chain"],
+            confidence="Medium",
+            extra={"certificate_chain": chain_extra},
+        ))
+
+        leaf = sig_info.certs[0]
+        publisher_name = leaf.subject_cn.strip()
+        unknown_markers = ("unknown", "test", "localhost", "default", "sample")
+        if not publisher_name or any(m in publisher_name.lower() for m in unknown_markers):
+            findings.append(Finding(
+                module="signature",
+                rule_id="unknown-publisher",
+                title="Unknown or placeholder publisher detected",
+                severity=Severity.MEDIUM,
+                file_path=path,
+                evidence=publisher_name or "missing publisher common name",
+                description="The signing certificate subject does not identify a clear production publisher.",
+                remediation="Use a production code-signing certificate with an organization/publisher identity users can recognize and trust.",
+                tags=["signature", "publisher", "reputation"],
+                confidence="Medium",
+            ))
+        elif leaf.self_signed or sig_info.osslsigncode_verified is False:
+            findings.append(Finding(
+                module="signature",
+                rule_id="publisher-reputation-review",
+                title="Publisher reputation requires review",
+                severity=Severity.LOW,
+                file_path=path,
+                evidence=publisher_name,
+                description="The publisher was extracted, but trust verification was incomplete or failed. This is a reputation review signal rather than an external reputation lookup.",
+                remediation="Confirm the publisher is expected, trusted by target endpoints, and consistent across released binaries.",
+                tags=["signature", "publisher", "reputation"],
+                confidence="Low",
+            ))
+
+    if sig_info.timestamp_present is False:
+        findings.append(Finding(
+            module="signature",
+            rule_id="missing-signature-timestamp",
+            title="Authenticode timestamp not detected",
+            severity=Severity.MEDIUM,
+            file_path=path,
+            evidence="osslsigncode output did not report a timestamp",
+            description="A signed binary without a timestamp may stop validating when the signing certificate expires.",
+            remediation="Timestamp signatures during release signing using a trusted RFC3161 timestamp authority.",
+            tags=["signature", "timestamp"],
+            confidence="Medium",
+        ))
+    elif sig_info.timestamp_present is True:
+        findings.append(Finding(
+            module="signature",
+            rule_id="signature-timestamp-present",
+            title="Authenticode timestamp detected",
+            severity=Severity.INFO,
+            file_path=path,
+            evidence="Timestamp information present in signature verification output",
+            description="The signature appears to include timestamp information, which helps signatures remain valid after certificate expiry.",
+            remediation="Continue timestamping all production code signatures and monitor timestamp authority trust.",
+            tags=["signature", "timestamp"],
+            confidence="Medium",
+        ))
 
     if sig_info.osslsigncode_verified is False and sig_info.osslsigncode_digest_mismatch:
         findings.append(

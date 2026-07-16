@@ -59,4 +59,4 @@ No scanning logic lives in the UI layer.
 - Window geometry and last-used scan config: OS-native `QSettings` store
   (registry on Windows, plist on macOS, config file on Linux).
 - Logs: `~/.warden/logs/warden.log`
-- Reports: `~/.warden/reports/warden_report_<timestamp>.{html,json}`
+- Reports: `<Warden application folder>/reports/warden_report_<timestamp>.{html,json}`

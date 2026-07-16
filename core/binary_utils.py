@@ -16,6 +16,8 @@ from __future__ import annotations
 import shutil
 import struct
 import subprocess
+import re
+import plistlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -53,6 +55,10 @@ class ELFInfo:
     nx_stack: Optional[bool] = None  # GNU_STACK segment lacking PF_X
     needed_libraries: list[str] = field(default_factory=list)
     rpath_runpath: list[str] = field(default_factory=list)
+    relro: str = "unknown"  # none/partial/full/unknown
+    has_stack_canary: Optional[bool] = None
+    fortify_symbols: list[str] = field(default_factory=list)
+    stripped: Optional[bool] = None
     error: Optional[str] = None
 
 
@@ -122,12 +128,16 @@ def parse_elf(path: Path) -> ELFInfo:
                 elif "RPATH" in line or "RUNPATH" in line:
                     if "[" in line:
                         info.rpath_runpath.append(line.split("[", 1)[1].rstrip("]").strip())
+                elif "BIND_NOW" in line:
+                    info.relro = "full"
             # GNU_STACK executable-flag check (missing NX == exploit-relevant)
             hdrs = subprocess.run(
                 ["readelf", "-lW", str(path)],
                 capture_output=True, text=True, timeout=15,
             ).stdout
             for line in hdrs.splitlines():
+                if "GNU_RELRO" in line and info.relro != "full":
+                    info.relro = "partial"
                 if "GNU_STACK" not in line:
                     continue
                 # Flags column is a short token made only of R/W/E letters
@@ -139,6 +149,18 @@ def parse_elf(path: Path) -> ELFInfo:
                 flag_tokens = [t for t in tokens if t and all(c in "RWE" for c in t)]
                 if flag_tokens:
                     info.nx_stack = "E" not in flag_tokens[-1]
+            syms = subprocess.run(
+                ["readelf", "-sW", str(path)],
+                capture_output=True, text=True, timeout=15,
+            ).stdout
+            info.has_stack_canary = "__stack_chk_fail" in syms
+            info.fortify_symbols = sorted(set(re.findall(r"\b([A-Za-z0-9_]+_chk)(?:@@|\s)", syms)))
+            info.stripped = ".symtab" not in subprocess.run(
+                ["readelf", "-SW", str(path)],
+                capture_output=True, text=True, timeout=15,
+            ).stdout
+            if info.relro == "unknown":
+                info.relro = "none"
         except (subprocess.SubprocessError, OSError, IndexError):
             pass  # best-effort only; header-level info above is unaffected
 
@@ -166,6 +188,9 @@ class MachOInfo:
     rpaths: list[str] = field(default_factory=list)
     codesign_status: Optional[str] = None  # None = codesign unavailable/not run
     entitlements_xml: Optional[str] = None
+    entitlements: dict = field(default_factory=dict)
+    hardened_runtime: Optional[bool] = None
+    notarized: Optional[bool] = None
     error: Optional[str] = None
 
 
@@ -244,6 +269,7 @@ def parse_macho(path: Path) -> MachOInfo:
                 info.codesign_status = "signed"
             else:
                 info.codesign_status = "unknown"
+            info.hardened_runtime = "runtime" in combined.lower()
         except (subprocess.SubprocessError, OSError):
             pass
 
@@ -254,6 +280,25 @@ def parse_macho(path: Path) -> MachOInfo:
             )
             if ent.returncode == 0 and ent.stdout.strip():
                 info.entitlements_xml = ent.stdout
+                try:
+                    info.entitlements = plistlib.loads(ent.stdout.encode("utf-8"))
+                except Exception:
+                    info.entitlements = {}
+        except (subprocess.SubprocessError, OSError):
+            pass
+
+    if _tool_available("spctl"):
+        try:
+            proc = subprocess.run(
+                ["spctl", "-a", "-vv", "-t", "exec", str(path)],
+                capture_output=True, text=True, timeout=15,
+            )
+            combined = (proc.stdout or "") + (proc.stderr or "")
+            lower = combined.lower()
+            if "notarized" in lower:
+                info.notarized = True
+            elif "accepted" in lower or "rejected" in lower:
+                info.notarized = False
         except (subprocess.SubprocessError, OSError):
             pass
 
