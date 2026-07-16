@@ -14,11 +14,42 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from PySide6.QtGui import QIcon  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from core.logging_config import setup_logging, get_logger  # noqa: E402
 
 logger = get_logger("desktop")
+
+# Windows/macOS/Linux pick the format they like best out of an .ico's
+# embedded sizes; .ico is used everywhere (not just Windows) since Qt
+# reads it fine cross-platform and it's the one file that covers every
+# resolution in one asset.
+ICON_PATH = Path(__file__).resolve().parent.parent / "assets" / "logo.ico"
+
+
+def _claim_windows_taskbar_identity() -> None:
+    """
+    Windows-only. Without this, a Python script's taskbar button/icon is
+    grouped under python.exe's own identity (and shows python.exe's icon)
+    regardless of any QIcon set in-process — Qt's setWindowIcon() controls
+    the title bar and alt-tab thumbnail, but the taskbar button specifically
+    follows the process's "App User Model ID", which defaults to the host
+    interpreter's unless a script explicitly claims its own. This is a
+    well-documented Windows quirk for any Python GUI app (Qt, Tkinter,
+    etc.), not specific to PySide6 or this project.
+
+    Must run before the first window is created to take effect. No-op on
+    non-Windows platforms.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        app_id = "AnkeshPrajapati.Warden.DesktopApp.1"
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+    except Exception as e:
+        logger.warning("Could not set Windows AppUserModelID (taskbar icon may fall back to python.exe's): %s", e)
 
 
 def _install_global_exception_hook(app: QApplication) -> None:
@@ -55,9 +86,15 @@ def main() -> int:
     setup_logging()
     logger.info("Warden desktop starting up")
 
+    _claim_windows_taskbar_identity()
+
     app = QApplication(sys.argv)
     app.setApplicationName("Warden")
     app.setOrganizationName("Ankesh Prajapati")
+    if ICON_PATH.exists():
+        app.setWindowIcon(QIcon(str(ICON_PATH)))
+    else:
+        logger.warning("Icon file not found at %s — using default icon.", ICON_PATH)
 
     _install_global_exception_hook(app)
 

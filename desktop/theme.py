@@ -7,7 +7,7 @@ colors) pull from so everything stays visually consistent in one place.
 """
 from __future__ import annotations
 
-import base64
+from pathlib import Path
 
 BG = "#101113"
 PANEL = "#17181b"
@@ -33,15 +33,12 @@ SEVERITY_COLORS = {
 
 # Qt stylesheets have no equivalent of CSS ::after/content — a checked
 # QCheckBox::indicator only ever gets what's drawn via border/background
-# unless you give it an explicit `image:`. Embedding a small checkmark SVG
-# as a data URI here (Qt QSS does support data: URIs in url()) means the
-# checkmark actually renders instead of leaving a blank filled square.
-_CHECKMARK_SVG = (
-    b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">'
-    b'<path d="M3.2 8.4L6.4 11.6L12.8 4.4" fill="none" stroke="#11131a" '
-    b'stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-)
-_CHECKMARK_DATA_URI = "data:image/svg+xml;base64," + base64.b64encode(_CHECKMARK_SVG).decode("ascii")
+# unless you give it an explicit `image:`. A base64 data: URI in url() was
+# tried first but proved unreliable in practice (renders inconsistently
+# across Qt versions/platforms) — a real file path is the documented,
+# reliably-working approach, so the checkmark ships as an actual PNG
+# asset instead.
+_CHECK_PNG_PATH = (Path(__file__).resolve().parent / "assets" / "check.png").as_posix()
 
 QSS = f"""
 * {{
@@ -165,7 +162,7 @@ QCheckBox::indicator {{
 QCheckBox::indicator:checked {{
     background-color: {ACCENT};
     border-color: {ACCENT};
-    image: url({_CHECKMARK_DATA_URI});
+    image: url("{_CHECK_PNG_PATH}");
 }}
 
 QTableWidget {{

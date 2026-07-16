@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, QTimer
-from PySide6.QtGui import QAction, QColor
+from PySide6.QtGui import QAction, QColor, QIcon
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -65,6 +65,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Warden — Static Security Analysis")
         self.resize(1180, 820)
+
+        icon_path = Path(__file__).resolve().parent.parent / "assets" / "logo.ico"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
 
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
