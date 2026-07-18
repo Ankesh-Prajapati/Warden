@@ -22,8 +22,12 @@ MODULE_NAME = "reputation"
 
 # Cap how many binaries get checked per scan so a large target tree can't
 # accidentally burn through a whole day's free-tier VT quota (500/day) in
-# one run, or make a large scan take hours purely on VT rate-limit waits.
-DEFAULT_MAX_LOOKUPS = 40
+# one run, or make a large scan take unexpectedly long purely on VT
+# rate-limit waits. Free tier is 1 lookup per ~15s, so even this reduced
+# default (15) has a ~4 minute floor — deliberately kept low since this is
+# the value used unless a caller explicitly raises it (e.g. a paid-tier
+# key that can afford a bigger number).
+DEFAULT_MAX_LOOKUPS = 15
 
 
 def _severity_for_verdict(malicious: int, suspicious: int, total_engines: int) -> Severity:
@@ -94,8 +98,14 @@ def run(
     binaries = binaries[:max_lookups]
 
     if error_callback:
-        error_callback(f"reputation: checking {len(binaries)} binary/binaries against VirusTotal "
-                        f"(this can take a while on the free tier — 1 lookup every ~15s)...")
+        eta_seconds = len(binaries) * client.min_interval_seconds
+        eta_minutes, eta_secs = divmod(int(eta_seconds), 60)
+        eta_text = f"~{eta_minutes}m {eta_secs}s" if eta_minutes else f"~{eta_secs}s"
+        error_callback(
+            f"reputation: checking {len(binaries)} binary/binaries against VirusTotal — "
+            f"estimated {eta_text} at this API tier's rate limit ({client.min_interval_seconds:.0f}s "
+            f"between lookups). This runs after all other selected modules finish."
+        )
 
     checked = 0
     flagged = 0

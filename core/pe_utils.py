@@ -325,3 +325,63 @@ def parse_pe(path: Path) -> PEInfo:
 
     pe.close()
     return info
+
+
+def get_version_strings(path: Path) -> set[str]:
+    """
+    Extract every FileVersion/ProductVersion-style string from a PE's
+    VERSIONINFO resource, e.g. "6.0.0.0", "19.0.3.0". Version numbers are
+    structurally identical to dotted-quad IPv4 addresses (four dot-
+    separated numbers), so the secrets module cross-checks its
+    hardcoded-ip matches against this set to suppress the specific,
+    very common false positive of a build/product version number being
+    misidentified as an embedded IP address.
+
+    Returns an empty set on any parse failure or if no VERSIONINFO
+    resource is present — callers should treat that as "nothing to
+    exclude," not an error.
+    """
+    versions: set[str] = set()
+    try:
+        pe = pefile.PE(str(path), fast_load=True)
+        pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"]])
+    except Exception:
+        return versions
+
+    try:
+        for file_info in getattr(pe, "FileInfo", []):
+            for entry in file_info:
+                # StringTable entries hold the human-readable FileVersion/
+                # ProductVersion strings analysts actually see in
+                # Explorer's Properties dialog.
+                if hasattr(entry, "StringTable"):
+                    for st in entry.StringTable:
+                        for _key, value in st.entries.items():
+                            v = value.decode("utf-8", errors="ignore") if isinstance(value, bytes) else str(value)
+                            if v:
+                                versions.add(v.strip())
+    except Exception:
+        pass
+
+    try:
+        if hasattr(pe, "VS_FIXEDFILEINFO"):
+            for ffi in pe.VS_FIXEDFILEINFO:
+                file_version = (
+                    f"{ffi.FileVersionMS >> 16}.{ffi.FileVersionMS & 0xFFFF}."
+                    f"{ffi.FileVersionLS >> 16}.{ffi.FileVersionLS & 0xFFFF}"
+                )
+                product_version = (
+                    f"{ffi.ProductVersionMS >> 16}.{ffi.ProductVersionMS & 0xFFFF}."
+                    f"{ffi.ProductVersionLS >> 16}.{ffi.ProductVersionLS & 0xFFFF}"
+                )
+                versions.add(file_version)
+                versions.add(product_version)
+    except Exception:
+        pass
+
+    try:
+        pe.close()
+    except Exception:
+        pass
+
+    return versions

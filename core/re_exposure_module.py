@@ -35,10 +35,12 @@ from core.pe_utils import (
     PEInfo,
     extract_strings_from_bytes,
     get_security_mitigations,
+    get_version_strings,
     is_pe_file,
     parse_pe,
 )
 from core.plugin_system import compile_yara_rules
+from core.indicator_utils import filter_out_version_strings, is_version_attribute_context
 
 # Import functions whose presence signals anti-debug awareness. Presence is
 # a maturity signal only — this module never generates bypass code.
@@ -58,7 +60,21 @@ SENSITIVE_LOGIC_KEYWORDS = (
 
 URL_RE = re.compile(r"https?://[^\s'\"<>]+", re.IGNORECASE)
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-DOMAIN_RE = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.IGNORECASE)
+# Matched against raw extracted binary strings, not natural-language text —
+# the original pattern (`(?:[a-z0-9-]+\.)+[a-z]{2,}`) had no TLD validation
+# at all, so it matched any "x.yz"-shaped noise fragment from decoded
+# binary data (e.g. "06.eT", "5.Oi", "4.cx") as if it were a real domain.
+# Requiring a real, common TLD and a minimum label length for the part
+# right before it cuts that out while still catching genuine hostnames.
+_COMMON_TLDS = (
+    "com|org|net|io|gov|edu|mil|co|info|biz|dev|app|cloud|ai|me|tv|"
+    "us|uk|de|cn|ru|jp|fr|in|br|au|ca|nl|se|no|es|it|pl|ch|kr|cz|"
+    "xyz|online|site|tech|cc|to|so|sh"
+)
+DOMAIN_RE = re.compile(
+    rf"\b(?:[a-z0-9]([a-z0-9-]{{0,61}}[a-z0-9])?\.){{1,}}(?:{_COMMON_TLDS})\b",
+    re.IGNORECASE,
+)
 REGISTRY_RE = re.compile(r"\bHKEY_(?:LOCAL_MACHINE|CURRENT_USER|CLASSES_ROOT|USERS|CURRENT_CONFIG)\\[^\s'\"<>]+", re.IGNORECASE)
 GUID_RE = re.compile(r"\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?", re.IGNORECASE)
 PIPE_RE = re.compile(r"\\\\\.\\pipe\\[A-Za-z0-9_.-]+", re.IGNORECASE)
@@ -91,6 +107,17 @@ _PACKER_SIGNATURES_PATH = Path(__file__).resolve().parent.parent / "rules" / "pa
 # (Shannon entropy per byte, max 8.0; legitimate compiled code sections
 # typically sit well below 7.0, compressed/encrypted data usually >7.2.)
 HIGH_SECTION_ENTROPY_THRESHOLD = 7.2
+
+# Standard PE section names that are near-universally high-entropy for
+# entirely benign reasons — .rsrc holds compressed icons/bitmaps/version
+# info/manifests, .debug/.pdata hold structured-but-dense debug data.
+# Flagging these specifically as "possible unrecognized packer" produces
+# near-constant noise, since almost every Windows executable has an
+# .rsrc section that trips the threshold just from its embedded icon.
+# The check is far more meaningful restricted to code/data sections
+# (.text, .data, or non-standard/custom section names), where unexpected
+# high entropy is a genuinely useful signal.
+BENIGN_HIGH_ENTROPY_SECTION_NAMES = {".rsrc", ".debug", ".pdata"}
 
 
 def _load_packer_signatures(path: Path | None = None) -> dict:
@@ -255,7 +282,11 @@ def _packer_findings(pe_path: Path, pe_info: PEInfo, signatures: dict) -> list[F
     known_section_names = {s.lower() for s in signatures.get("packer_section_names", [])}
 
     matched_sections = [s for s in pe_info.sections if s["name"].lower() in known_section_names]
-    high_entropy_sections = [s for s in pe_info.sections if s["entropy"] >= HIGH_SECTION_ENTROPY_THRESHOLD]
+    high_entropy_sections = [
+        s for s in pe_info.sections
+        if s["entropy"] >= HIGH_SECTION_ENTROPY_THRESHOLD
+        and s["name"].lower() not in BENIGN_HIGH_ENTROPY_SECTION_NAMES
+    ]
 
     if matched_sections:
         names = ", ".join(s["name"] for s in matched_sections)
@@ -478,6 +509,28 @@ def _anti_debug_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
     )
 
 
+def _looks_like_plausible_domain(candidate: str) -> bool:
+    """
+    Extra filter applied only to DOMAIN_RE matches, on top of the
+    TLD-restricted regex. A real, common TLD alone still lets through
+    noise like "4Z.jp" (jp is a genuine TLD) when matched against raw
+    binary string garbage — real registrable domains essentially always
+    have a second-level label of 3+ characters that isn't mostly digits
+    (compare actual domains like "acme.com" or "api.io" against noise
+    fragments like "4Z.jp" or "5.to").
+    """
+    labels = candidate.split(".")
+    if len(labels) < 2:
+        return False
+    sld = labels[-2]
+    if len(sld) < 3:
+        return False
+    digit_count = sum(1 for c in sld if c.isdigit())
+    if digit_count > len(sld) / 2:
+        return False
+    return True
+
+
 def _artifact_findings(pe_path: Path, strings: list[str]) -> list[Finding]:
     joined = "\n".join(strings)
     patterns = {
@@ -489,9 +542,38 @@ def _artifact_findings(pe_path: Path, strings: list[str]) -> list[Finding]:
         "named-pipe": PIPE_RE,
         "mutex": MUTEX_RE,
     }
+    # A build/product version number ("6.0.0.0", "19.0.3.0", "10.60.20.0")
+    # is structurally identical to a dotted-quad IPv4 address, and this
+    # binary's own VERSIONINFO resource is the authoritative source for
+    # which specific numbers are actually its version — not a guess from
+    # digit patterns alone. Cross-check IP matches against it before they
+    # ever become a finding, the same way secrets_module already does for
+    # its "hardcoded-ip" rule.
+    version_strings = get_version_strings(pe_path)
     findings = []
     for name, regex in patterns.items():
-        matches = sorted(set(m.group(0).rstrip("),.;") for m in regex.finditer(joined)))[:25]
+        if name == "ip":
+            # Position-aware: also drops dotted-quad numbers that are the
+            # *value* of a version="..." / FileVersion=... attribute
+            # (extremely common in embedded manifest XML, e.g. the
+            # Microsoft.Windows.Common-Controls dependency every Windows
+            # app manifest declares) — a false-positive source the plain
+            # VERSIONINFO cross-check below doesn't cover, since that XML
+            # version string never appears in the PE's VERSIONINFO
+            # resource at all.
+            matches = []
+            for m in regex.finditer(joined):
+                if is_version_attribute_context(joined, m.start()):
+                    continue
+                val = m.group(0).rstrip("),.;")
+                if val not in matches:
+                    matches.append(val)
+            matches = sorted(matches)[:25]
+            matches = filter_out_version_strings(matches, version_strings)
+        else:
+            matches = sorted(set(m.group(0).rstrip("),.;") for m in regex.finditer(joined)))[:25]
+            if name == "domain":
+                matches = [m for m in matches if _looks_like_plausible_domain(m)]
         if matches:
             findings.append(Finding(
                 module="re_exposure",

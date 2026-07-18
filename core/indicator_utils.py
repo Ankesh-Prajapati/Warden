@@ -13,6 +13,33 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
+# Matches immediately-preceding context like `version="`, `Version:`,
+# `FileVersion=`, `assemblyIdentity ... version='` — i.e. the match is the
+# *value* of a version attribute/field, not a standalone network address.
+# This is the manifest/XML equivalent of the PE-VERSIONINFO cross-check:
+# embedded application manifests (assemblyIdentity, dependency entries for
+# things like "Microsoft.Windows.Common-Controls") declare a
+# `version="6.0.0.0"` attribute on almost every Windows PE, and that number
+# is structurally identical to a dotted-quad IPv4 address. Checking the
+# textual context right before a match is more general than cross-checking
+# against a single VERSIONINFO resource, since it also catches manifest XML,
+# .NET AssemblyVersion attributes, and similar version declarations that
+# don't come from VERSIONINFO at all.
+_VERSION_CONTEXT_RE = re.compile(
+    r"(?:version|fileversion|productversion|assemblyversion|schemaversion)\s*[:=]\s*[\"']?$",
+    re.IGNORECASE,
+)
+
+
+def is_version_attribute_context(text: str, match_start: int, lookback: int = 40) -> bool:
+    """True if the text immediately before `match_start` looks like a
+    `version="` / `Version:` / `FileVersion=` style attribute assignment —
+    meaning the dotted-quad number at `match_start` is a declared version
+    number, not a real network indicator."""
+    prefix = text[max(0, match_start - lookback):match_start]
+    return bool(_VERSION_CONTEXT_RE.search(prefix))
+
+
 URL_RE = re.compile(r"https?://[^\s\"'<>]{4,300}")
 IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
@@ -90,6 +117,22 @@ def extract_urls(text: str, max_results: int = 15) -> list[str]:
     return seen
 
 
+def filter_out_version_strings(ips: list[str], version_strings: set[str]) -> list[str]:
+    """
+    Drop any dotted-quad "IP" that exactly matches a version string the
+    same binary actually declares in its own VERSIONINFO resource (e.g.
+    "6.0.0.0", "19.0.3.0", "10.60.20.0"). A build/product version number
+    is structurally identical to an IPv4 address — both are four
+    dot-separated 0-255 numbers — so this is the single most common
+    false-positive source for IP extraction against PE binaries, and the
+    fix is to check against the specific version string(s) this binary
+    itself declares, not to guess from the digits alone.
+    """
+    if not version_strings:
+        return ips
+    return [ip for ip in ips if ip not in version_strings]
+
+
 def extract_ips(text: str, max_results: int = 15) -> list[str]:
     seen: list[str] = []
     for m in IPV4_RE.finditer(text):
@@ -100,6 +143,8 @@ def extract_ips(text: str, max_results: int = 15) -> list[str]:
         # embedded right before/after a letter (e.g. "libfoo.so.1.2.3.4"),
         # loopback netmask noise, and all-zero addresses.
         if candidate in ("0.0.0.0", "255.255.255.255"):
+            continue
+        if is_version_attribute_context(text, m.start()):
             continue
         if candidate not in seen:
             seen.append(candidate)

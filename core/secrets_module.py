@@ -29,7 +29,8 @@ from core.fs_walk import (
     read_text_safely,
 )
 from core.models import Finding, Severity, redact
-from core.pe_utils import extract_strings_from_bytes, is_pe_file, parse_pe
+from core.pe_utils import extract_strings_from_bytes, get_version_strings, is_pe_file, parse_pe
+from core.indicator_utils import is_version_attribute_context
 from core.rules import Rule, load_rules
 
 JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
@@ -103,6 +104,72 @@ _REGEX_SYNTAX_MARKERS = (
 def _looks_like_regex_definition(evidence: str) -> bool:
     hits = sum(1 for marker in _REGEX_SYNTAX_MARKERS if marker in evidence)
     return hits >= 2
+
+
+def _looks_like_sequential_charset(evidence: str) -> bool:
+    """
+    Catches charset/alphabet tables ("0123456789abcdefghijklmnopqrstuvwxyz",
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ") — a near-universal constant embedded in
+    binaries for base64/base32/hex encoding tables, sorting routines, etc.
+    These score as high-entropy by character *diversity* even though
+    they're maximally predictable (fully sequential), which is exactly
+    the opposite of what makes a real secret high-entropy — a genuine
+    secret's high entropy comes from unpredictability, not from happening
+    to use every letter once in alphabetical order.
+
+    Checks whether the candidate, once we look at only its
+    letters/digits, is itself an unbroken run of consecutive characters
+    (allowing either direction, and allowing the value to be a
+    contiguous slice of the alphabet/digit sequence rather than
+    requiring the full 26/10 characters).
+    """
+    core = "".join(c for c in evidence if c.isalnum())
+    if len(core) < 8:
+        return False
+
+    def _is_sequential_run(s: str) -> bool:
+        if len(s) < 2:
+            return True
+        chars = s.lower()
+        forward = all(ord(chars[i + 1]) - ord(chars[i]) == 1 for i in range(len(chars) - 1))
+        backward = all(ord(chars[i]) - ord(chars[i + 1]) == 1 for i in range(len(chars) - 1))
+        return forward or backward
+
+    # Split into maximal same-type runs (digits vs letters) so a
+    # concatenated charset table like "0123456789abcdefg..." — digits
+    # then letters, the exact real-world case this heuristic exists for —
+    # is checked as two sequential runs rather than one mixed string that
+    # trivially fails a single ascending-by-one check across the digit/
+    # letter boundary.
+    runs = re.findall(r"\d+|[A-Za-z]+", core)
+    if not runs:
+        return False
+    substantial_runs = [r for r in runs if len(r) >= 6]
+    if not substantial_runs:
+        return False
+    return all(_is_sequential_run(r) for r in runs)
+
+
+_CERT_AUTHORITY_MARKERS = (
+    "digicert", "verisign", "sectigo", "globalsign", "comodo", "thawte",
+    "geotrust", "entrust", "godaddy", "letsencrypt", "let's encrypt",
+    "trustedroot", "trusted root", "codesigning", "code signing",
+    "timestamping", "time stamping", "certificate authority",
+)
+
+
+def _looks_like_certificate_authority_string(evidence: str) -> bool:
+    """
+    Catches certificate-chain/CA name fragments (e.g. embedded
+    "DigiCertTrustedG4CodeSigningRSA4096SHA3842021CA1" strings from a
+    binary's own Authenticode certificate chain) — these are long,
+    mixed-case, numeric-heavy strings that score as high-entropy the same
+    way a real secret would, but they're public certificate authority
+    names, not credentials. Any signed binary embeds several of these as
+    plain strings; they're pure noise for a secrets scan.
+    """
+    lowered = evidence.lower()
+    return any(marker in lowered for marker in _CERT_AUTHORITY_MARKERS)
 
 
 def _extract_context(lines: list[str], line_no: int, radius: int = 2, max_line_len: int = 200) -> str:
@@ -353,6 +420,14 @@ def _scan_text_content(
                 # definition inside a rules/*.yaml-style file), not an
                 # actual hardcoded credential — see _looks_like_regex_definition.
                 continue
+            if rule.id == "hardcoded-ip" and is_version_attribute_context(content, match.start()):
+                # Dotted-quad version numbers (PE VERSIONINFO, embedded
+                # manifest assemblyIdentity/dependency version="6.0.0.0",
+                # .NET AssemblyVersion, etc.) are structurally identical to
+                # an IPv4 address. If the text right before this match is a
+                # version="/Version:/FileVersion= style attribute, this is
+                # a declared version number, not a network indicator.
+                continue
             line_no = content.count("\n", 0, match.start()) + 1
             findings.append(
                 Finding(
@@ -393,6 +468,10 @@ def _scan_text_content(
             # "key=VALUE" assignment while the entropy scanner isolates just
             # the VALUE token (or vice versa), which is still the same secret.
             if any(candidate in f.evidence or f.evidence in candidate for f in findings):
+                continue
+            if _looks_like_sequential_charset(candidate):
+                continue
+            if _looks_like_certificate_authority_string(candidate):
                 continue
             line_no = content.count("\n", 0, offset) + 1
             findings.append(
@@ -467,6 +546,20 @@ def _scan_pe_strings(
     # content, while preserving byte offsets for reporting.
     joined = "\n".join(s for s, _ in strings_with_offsets)
     text_findings = _scan_text_content(joined, str(pe_path), rules, enable_entropy)
+
+    # A build/product version number ("6.0.0.0", "19.0.3.0") is
+    # structurally identical to a dotted-quad IPv4 address, and PE
+    # binaries always embed their own version as a plain string somewhere
+    # — this is the single most common false positive for the
+    # hardcoded-ip rule. Drop any match that exactly equals a version
+    # string this specific binary actually declares in its own
+    # VERSIONINFO resource, rather than guessing from the digits alone.
+    version_strings = get_version_strings(pe_path)
+    if version_strings:
+        text_findings = [
+            f for f in text_findings
+            if not (f.rule_id == "hardcoded-ip" and f.evidence.strip() in version_strings)
+        ]
 
     # Re-map line-number placeholders to byte offsets where possible, and
     # tag these findings as binary-origin for the report.

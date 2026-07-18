@@ -112,6 +112,14 @@ class WardenSettings:
     def vt_include_clean(self, value: bool) -> None:
         self._qs.setValue("vt/include_clean", value)
 
+    @property
+    def vt_max_lookups(self) -> int:
+        return self._qs.value("vt/max_lookups", 15, int)
+
+    @vt_max_lookups.setter
+    def vt_max_lookups(self, value: int) -> None:
+        self._qs.setValue("vt/max_lookups", value)
+
     # -- window state -----------------------------------------------------
     def save_geometry(self, geometry: bytes) -> None:
         self._qs.setValue("window/geometry", geometry)

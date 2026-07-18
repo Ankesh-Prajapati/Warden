@@ -42,7 +42,7 @@ def cli():
 @click.option("--no-osslsigncode", is_flag=True, help="Skip shelling out to osslsigncode for full signature verification (Module 3 structural checks still run).")
 @click.option("--vt-api-key", default=None, envvar="VT_API_KEY", help="VirusTotal API key for the 'reputation' module. Can also be set via the VT_API_KEY env var. Only a SHA-256 hash is ever sent — see --vt-upload-unknown.")
 @click.option("--vt-include-clean", is_flag=True, help="Also emit an Info finding for binaries VirusTotal has seen and NOT flagged (default: only flagged binaries are reported).")
-@click.option("--vt-max-lookups", default=40, show_default=True, help="Cap on binaries checked per scan, to stay within VirusTotal rate/quota limits.")
+@click.option("--vt-max-lookups", default=15, show_default=True, help="Cap on binaries checked per scan, to stay within VirusTotal rate/quota limits. At ~15s/lookup on the free tier, this is the main lever on how much time the reputation module adds to a scan.")
 @click.option("--vt-upload-unknown", is_flag=True, help="DANGER: if a binary's hash isn't already known to VirusTotal, upload the file itself for analysis. Off by default — uploading proprietary/client binaries to a third party may violate engagement confidentiality. Only enable this if you've confirmed it's acceptable for this target.")
 @click.option("--incremental", is_flag=True, help="Use the SHA-256 scan cache and skip unchanged files where supported.")
 @click.option("--cache-file", default=None, type=click.Path(dir_okay=False), help="Override the incremental scan cache file.")
@@ -58,6 +58,16 @@ def scan(target, output, json_output, rules_dir, no_entropy, no_pe_strings, modu
 
     console.print(f"[bold cyan]Warden[/bold cyan] scanning [white]{target}[/white]")
     console.print(f"Modules: {', '.join(selected_modules)}")
+
+    if "reputation" in selected_modules:
+        eta_seconds = vt_max_lookups * 15
+        eta_minutes, eta_secs = divmod(eta_seconds, 60)
+        eta_text = f"{eta_minutes}m {eta_secs}s" if eta_minutes else f"{eta_secs}s"
+        console.print(
+            f"[dim]reputation: worst case on the free VirusTotal tier, up to {eta_text} added "
+            f"for {vt_max_lookups} lookups (~15s each). Runs after all other selected modules "
+            f"finish. Lower with --vt-max-lookups if this scan doesn't need full coverage.[/dim]"
+        )
 
     if "reputation" in selected_modules and vt_upload_unknown:
         console.print(

@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSplitter,
+    QSpinBox,
     QStatusBar,
     QTableWidget,
     QTableWidgetItem,
@@ -277,6 +278,23 @@ class MainWindow(QMainWindow):
         self.opt_reputation = QCheckBox("Enable reputation check for this scan")
         vt_layout.addWidget(self.opt_reputation)
 
+        max_lookups_row = QHBoxLayout()
+        max_lookups_label = QLabel("Max binaries to check per scan:")
+        self.vt_max_lookups_input = QSpinBox()
+        self.vt_max_lookups_input.setRange(1, 500)
+        self.vt_max_lookups_input.setValue(15)
+        self.vt_max_lookups_input.valueChanged.connect(self._update_vt_eta_label)
+        max_lookups_row.addWidget(max_lookups_label)
+        max_lookups_row.addWidget(self.vt_max_lookups_input)
+        max_lookups_row.addStretch()
+        vt_layout.addLayout(max_lookups_row)
+
+        self.vt_eta_label = QLabel("")
+        self.vt_eta_label.setObjectName("subheading")
+        self.vt_eta_label.setWordWrap(True)
+        vt_layout.addWidget(self.vt_eta_label)
+        self._update_vt_eta_label()
+
         vt_key_label = QLabel("VirusTotal API key (stored via OS settings storage — plaintext, "
                                "same as other desktop apps' saved credentials):")
         vt_key_label.setObjectName("subheading")
@@ -458,6 +476,8 @@ class MainWindow(QMainWindow):
         if self.settings.vt_api_key:
             self.vt_api_key_input.setPlaceholderText("Saved key in use — paste a new one to replace it")
         self.opt_vt_include_clean.setChecked(self.settings.vt_include_clean)
+        self.vt_max_lookups_input.setValue(self.settings.vt_max_lookups)
+        self._update_vt_eta_label()
 
     def _save_settings_from_ui(self) -> None:
         self.settings.last_target = self.target_input.text()
@@ -476,6 +496,7 @@ class MainWindow(QMainWindow):
             self.vt_api_key_input.clear()
             self.vt_api_key_input.setPlaceholderText("Saved key in use — paste a new one to replace it")
         self.settings.vt_include_clean = self.opt_vt_include_clean.isChecked()
+        self.settings.vt_max_lookups = self.vt_max_lookups_input.value()
 
     def closeEvent(self, event) -> None:
         try:
@@ -574,6 +595,7 @@ class MainWindow(QMainWindow):
             "vt_api_key": self.vt_api_key_input.text().strip() or self.settings.vt_api_key,
             "vt_include_clean": self.opt_vt_include_clean.isChecked(),
             "vt_upload_unknown": self.opt_vt_upload.isChecked(),
+            "vt_max_lookups": self.vt_max_lookups_input.value(),
         }
 
         self.run_btn.setEnabled(False)
@@ -588,6 +610,21 @@ class MainWindow(QMainWindow):
             logger.error("Failed to start scan: %s\n%s", e, traceback.format_exc())
             self._append_log(f"Failed to start scan: {e}", "error")
             self._scan_ui_reset()
+
+    def _update_vt_eta_label(self) -> None:
+        # Free-tier VirusTotal is 1 lookup per ~15s — shown as a worst-case
+        # estimate right next to the control that determines it, so this
+        # time cost is visible before Run Scan is clicked, not discovered
+        # 15+ minutes into a scan that already looked "done."
+        n = self.vt_max_lookups_input.value()
+        seconds = n * 15
+        minutes, secs = divmod(seconds, 60)
+        eta = f"{minutes}m {secs}s" if minutes else f"{secs}s"
+        self.vt_eta_label.setText(
+            f"Worst case on the free API tier: up to {eta} added to the scan, checking {n} "
+            f"binaries at ~15s each. Runs after all other selected modules finish. A paid "
+            f"tier lifts the per-lookup wait — this estimate is free-tier-conservative."
+        )
 
     def _test_vt_key(self) -> None:
         key = self.vt_api_key_input.text().strip() or self.settings.vt_api_key

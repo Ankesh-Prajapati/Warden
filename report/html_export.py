@@ -24,6 +24,30 @@ SEVERITY_COLORS = {
     "Info": "#8b8f96",
 }
 
+# Presentational-only: two-stop gradients derived from the same severity
+# colors above, used purely for premium-looking badges/cards/heatmap cells.
+# Carries no data and does not affect severity logic or JSON output.
+SEVERITY_GRADIENTS = {
+    "Critical": ("#ff7a70", "#c23b39"),
+    "High": ("#ffab6b", "#c2660f"),
+    "Medium": ("#f3d16a", "#b8860b"),
+    "Low": ("#8db6ff", "#3f68d6"),
+    "Info": ("#b0b6c2", "#666c78"),
+}
+
+SEVERITY_GLYPHS = {
+    "Critical": "\u2716",   # heavy multiplication x
+    "High": "\u25B2",       # triangle
+    "Medium": "\u25CF",     # circle
+    "Low": "\u25C6",        # diamond
+    "Info": "\u2139",       # info
+}
+
+
+def _severity_gradient(sev: str) -> str:
+    c1, c2 = SEVERITY_GRADIENTS.get(sev, ("#9aa0ab", "#666c78"))
+    return f"linear-gradient(135deg, {c1}, {c2})"
+
 MODULE_LABELS = {
     "secrets": "Secrets & Config Exposure",
     "dll_hijack": "DLL Hijacking Detection",
@@ -81,232 +105,400 @@ _BRAND_SVG = _load_brand_logo_tag()
 
 _STYLE = """
 :root {
-  --bg: #101113;
-  --panel: #17181b;
-  --panel-alt: #131416;
-  --border: #24262a;
-  --text: #e9eaec;
-  --muted: #8b8f96;
+  --bg: #0a0b0e;
+  --bg-radial: radial-gradient(1200px 600px at 15% -10%, rgba(109,140,240,.08), transparent 60%),
+               radial-gradient(900px 500px at 100% 0%, rgba(143,109,240,.06), transparent 55%);
+  --panel: #14161b;
+  --panel-alt: #101216;
+  --panel-elevated: #191c22;
+  --border: #22252c;
+  --border-soft: #1b1e24;
+  --text: #edeef2;
+  --text-secondary: #b4b9c4;
+  --muted: #868c98;
   --accent: #6d8cf0;
-  --accent-soft: #93aaf3;
+  --accent-soft: #9db0f5;
+  --accent-dim: rgba(109,140,240,.14);
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --radius-sm: 7px;
+  --shadow-card: 0 1px 2px rgba(0,0,0,.24), 0 8px 24px -12px rgba(0,0,0,.5);
+  --shadow-card-hover: 0 2px 4px rgba(0,0,0,.28), 0 16px 40px -16px rgba(0,0,0,.6);
+  --ease: cubic-bezier(.2,.7,.3,1);
 }
 * { box-sizing: border-box; }
+html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 body {
-  background: var(--bg);
+  background: var(--bg-radial), var(--bg);
+  background-attachment: fixed;
   color: var(--text);
-  font-family: 'Segoe UI', 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
   margin: 0;
   padding: 0;
+  -moz-osx-font-smoothing: grayscale;
 }
-.wrap { max-width: 1180px; margin: 0 auto; padding: 32px 28px 60px; }
+::selection { background: var(--accent-dim); color: var(--text); }
+.wrap { max-width: 1200px; margin: 0 auto; padding: 48px 32px 72px; }
 
+/* ---------- Header ---------- */
 header {
   border-bottom: 1px solid var(--border);
-  padding-bottom: 22px;
-  margin-bottom: 20px;
+  padding-bottom: 28px;
+  margin-bottom: 28px;
 }
-header .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
-header .brand .badge-icon { display: inline-flex; line-height: 0; }
+header .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+header .brand .badge-icon {
+  display: inline-flex; line-height: 0; padding: 6px;
+  background: var(--panel-elevated); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-card);
+}
+header .eyebrow {
+  color: var(--accent-soft); font-size: 11px; font-weight: 700; letter-spacing: 2px;
+  text-transform: uppercase; margin: 0 0 6px 0;
+}
 header h1 {
   color: var(--text);
-  font-size: 21px;
-  letter-spacing: 0.3px;
+  font-size: 25px;
+  letter-spacing: -0.2px;
   margin: 0;
-  font-weight: 600;
+  font-weight: 700;
 }
-header .meta { color: var(--muted); font-size: 12.5px; line-height: 1.7; margin-top: 10px; }
-header .meta b { color: var(--text); font-weight: 600; }
+header .subtitle { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1px;
+  margin-top: 22px;
+  background: var(--border-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.meta-item { background: var(--panel-alt); padding: 12px 16px; }
+.meta-item .meta-label {
+  color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.9px; margin-bottom: 5px;
+}
+.meta-item .meta-value {
+  color: var(--text); font-size: 13px; font-weight: 600; word-break: break-word;
+  font-variant-numeric: tabular-nums;
+}
+.meta-item .meta-value.mono { font-family: 'SF Mono', 'Consolas', 'Fira Code', monospace; font-size: 12px; font-weight: 500; color: var(--text-secondary); }
 
+/* ---------- Risk banner ---------- */
 .risk-banner {
-  border-radius: 10px;
-  padding: 16px 22px;
-  margin-bottom: 22px;
+  position: relative;
+  border-radius: var(--radius-lg);
+  padding: 20px 26px;
+  margin-bottom: 24px;
   border: 1px solid var(--border);
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 18px;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
 }
-.risk-banner .risk-icon { font-size: 26px; line-height: 1; }
-.risk-banner .risk-title { font-size: 15px; font-weight: 700; letter-spacing: 0.3px; }
-.risk-banner .risk-sub { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.risk-banner::before {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,.04), rgba(255,255,255,0) 45%);
+  pointer-events: none;
+}
+.risk-icon-circle {
+  flex-shrink: 0;
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 19px;
+  box-shadow: 0 4px 14px -4px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.12);
+}
+.risk-banner .risk-title { font-size: 16px; font-weight: 700; letter-spacing: 0.1px; }
+.risk-banner .risk-sub { color: var(--text-secondary); font-size: 12.5px; margin-top: 4px; }
 
-.summary { display: flex; gap: 12px; margin-bottom: 22px; flex-wrap: wrap; }
-.section-title { color: var(--text); font-size: 13px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; margin: 24px 0 10px; }
-.dashboard-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
-.dash-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
-.dash-panel h2 { font-size: 12px; margin: 0 0 8px 0; color: var(--accent-soft); text-transform: uppercase; letter-spacing: 1px; }
-.dash-panel div { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
-.heatmap { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
-.heat-cell {
-  min-height: 48px;
-  border-radius: 6px;
-  padding: 8px;
-  color: #ffffff;
-  font-weight: 700;
-  text-shadow: 0 1px 2px rgba(0,0,0,.55);
-  border: 1px solid rgba(255,255,255,.14);
+/* ---------- Section titles ---------- */
+.section-title {
+  color: var(--text);
+  font-size: 12px; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase;
+  margin: 32px 0 14px;
+  display: flex; align-items: center; gap: 9px;
 }
-.heat-cell .heat-label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; opacity: .96; }
-.heat-cell .heat-count { display: block; font-size: 18px; line-height: 1.2; margin-top: 2px; }
-.summary-card {
-  background: var(--panel);
+.section-title::before {
+  content: ""; width: 3px; height: 13px; border-radius: 2px;
+  background: linear-gradient(180deg, var(--accent), var(--accent-soft));
+  display: inline-block;
+}
+
+/* ---------- Dashboard ---------- */
+.dashboard-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 8px; }
+.dash-panel {
+  background: linear-gradient(180deg, var(--panel-elevated), var(--panel));
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 14px 22px;
-  min-width: 108px;
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  box-shadow: var(--shadow-card);
+  transition: border-color .18s var(--ease), transform .18s var(--ease);
+}
+.dash-panel:hover { border-color: #2c3038; transform: translateY(-1px); }
+.dash-panel h2 {
+  font-size: 11px; margin: 0 0 10px 0; color: var(--accent-soft);
+  text-transform: uppercase; letter-spacing: 1.2px; font-weight: 700;
+  display: flex; align-items: center; gap: 7px;
+}
+.dash-panel h2::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim);
+}
+.dash-panel div { font-size: 12.5px; color: var(--text-secondary); line-height: 1.65; }
+
+.heatmap { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.heat-cell {
+  position: relative;
+  min-height: 54px;
+  border-radius: var(--radius-sm);
+  padding: 9px 10px;
+  color: #000000;
+  font-weight: 800;
+  text-shadow: none;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.18), 0 4px 12px -6px rgba(0,0,0,.5);
+  overflow: hidden;
+  transition: transform .15s var(--ease);
+}
+.heat-cell .heat-label { display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .5px; opacity: .85; font-weight: 800; color: #000000; }
+.heat-cell .heat-count { display: block; font-size: 20px; line-height: 1.25; margin-top: 3px; font-variant-numeric: tabular-nums; color: #000000; font-weight: 800; }
+.heat-cell:hover { transform: translateY(-2px); }
+
+/* ---------- Severity summary cards ---------- */
+.summary { display: flex; gap: 14px; margin-bottom: 26px; flex-wrap: wrap; }
+.summary-card {
+  position: relative;
+  background: linear-gradient(180deg, var(--panel-elevated), var(--panel));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0;
+  min-width: 118px;
   flex: 1;
   cursor: pointer;
-  transition: transform .12s ease, border-color .12s ease;
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+  transition: transform .16s var(--ease), box-shadow .16s var(--ease), border-color .16s var(--ease);
   user-select: none;
 }
-.summary-card:hover { transform: translateY(-2px); border-color: var(--accent); }
-.summary-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
-.summary-card .count { font-size: 26px; font-weight: 700; line-height: 1; }
-.summary-card .label { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; margin-top: 6px; }
+.summary-card .card-accent { height: 3px; width: 100%; }
+.summary-card .card-body { padding: 16px 20px 18px; }
+.summary-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-card-hover); border-color: #2c3038; }
+.summary-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), var(--shadow-card-hover); }
+.summary-card .count { font-size: 28px; font-weight: 800; line-height: 1; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; }
+.summary-card .label { color: var(--muted); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.1px; margin-top: 8px; }
 
+/* ---------- Toolbar ---------- */
 .toolbar {
   display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 18px; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 20px; gap: 12px; flex-wrap: wrap;
 }
-.toolbar .count-label { color: var(--muted); font-size: 12.5px; }
+.toolbar .count-label { color: var(--muted); font-size: 12px; }
 .toolbar input[type=search] {
   background: var(--panel-alt); border: 1px solid var(--border); color: var(--text);
-  border-radius: 6px; padding: 8px 12px; font-size: 13px; min-width: 240px;
+  border-radius: var(--radius-sm); padding: 10px 14px 10px 34px; font-size: 13px; min-width: 260px;
   font-family: inherit;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23868c98' stroke-width='2'><circle cx='11' cy='11' r='7'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>");
+  background-repeat: no-repeat; background-position: 12px center;
+  transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
 }
-.toolbar input[type=search]:focus { outline: none; border-color: var(--accent); }
+.toolbar input[type=search]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 
-/* --- Module sections --- */
+/* ---------- Module sections ---------- */
 details.module-section {
-  margin-bottom: 14px;
+  margin-bottom: 16px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--panel-alt);
   overflow: hidden;
+  box-shadow: var(--shadow-card);
 }
 details.module-section > summary {
   cursor: pointer;
   list-style: none;
-  padding: 14px 18px;
+  padding: 16px 20px;
   display: flex;
   align-items: center;
   gap: 12px;
   user-select: none;
-  background: var(--panel);
+  background: linear-gradient(180deg, var(--panel-elevated), var(--panel));
+  transition: background .15s var(--ease);
 }
+details.module-section > summary:hover { background: var(--panel-elevated); }
 details.module-section > summary::-webkit-details-marker { display: none; }
-details.module-section > summary:before { content: "\\25B8"; color: var(--accent); font-size: 13px; width: 12px; }
-details.module-section[open] > summary:before { content: "\\25BE"; }
-.module-title { font-size: 13.5px; font-weight: 700; letter-spacing: 0.2px; }
-.module-count { color: var(--muted); font-size: 11.5px; margin-left: auto; }
-.module-sevdots { display: flex; gap: 5px; }
-.module-sevdots span { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.module-body { padding: 14px; }
+details.module-section > summary::before {
+  content: "";
+  width: 8px; height: 8px;
+  border-right: 2px solid var(--accent-soft); border-bottom: 2px solid var(--accent-soft);
+  transform: rotate(-45deg);
+  transition: transform .2s var(--ease);
+  flex-shrink: 0;
+}
+details.module-section[open] > summary::before { transform: rotate(45deg); }
+.module-title { font-size: 14px; font-weight: 700; letter-spacing: 0.1px; }
+.module-count {
+  color: var(--muted); font-size: 11px; font-weight: 600; margin-left: auto;
+  background: var(--panel-alt); border: 1px solid var(--border); border-radius: 20px; padding: 3px 11px;
+}
+.module-sevdots { display: flex; gap: 6px; }
+.module-sevdots span { width: 9px; height: 9px; border-radius: 50%; display: inline-block; box-shadow: inset 0 0 0 1px rgba(255,255,255,.14); }
+.module-body { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 
+/* ---------- Finding cards ---------- */
 .finding {
+  position: relative;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-left: 4px solid #444;
-  border-radius: 8px;
-  padding: 18px 22px;
-  margin-bottom: 12px;
+  border-radius: var(--radius-md);
+  padding: 20px 24px;
+  transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
+  box-shadow: var(--shadow-card);
 }
-.finding:last-child { margin-bottom: 0; }
-.finding-header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.finding::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+  background: var(--finding-accent, #444); border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+.finding:hover { border-color: #2b2f38; }
+.finding-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
 .badge {
+  display: inline-flex; align-items: center; gap: 5px;
   font-size: 10.5px;
   font-weight: 700;
-  padding: 4px 11px;
-  border-radius: 4px;
+  padding: 5px 12px;
+  border-radius: 20px;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: #101113;
+  letter-spacing: 0.6px;
+  color: #12131a;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.22), 0 2px 6px -2px rgba(0,0,0,.4);
 }
-.finding-title { font-size: 15px; font-weight: 600; color: var(--text); }
+.badge .glyph { font-size: 9px; }
+.finding-title { font-size: 15.5px; font-weight: 650; color: var(--text); letter-spacing: -.1px; }
 .affected-count {
-  color: var(--muted); font-size: 11px; font-weight: 600;
+  color: var(--text-secondary); font-size: 11px; font-weight: 600;
   background: var(--panel-alt); border: 1px solid var(--border);
-  border-radius: 10px; padding: 2px 9px;
+  border-radius: 20px; padding: 3px 10px;
 }
-.finding-meta { color: var(--muted); font-size: 11.5px; margin-bottom: 12px; }
-.finding-section { font-size: 13px; margin-top: 10px; }
-.finding-section .label { color: var(--accent-soft); font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; font-weight: 700; }
+.finding-meta { color: var(--muted); font-size: 11.5px; margin-bottom: 14px; letter-spacing: .1px; }
+.finding-meta b { color: var(--text-secondary); font-weight: 600; }
+.finding-section { font-size: 13px; margin-top: 12px; }
+.finding-section .label {
+  color: var(--accent-soft); font-size: 10px; text-transform: uppercase; letter-spacing: 1.1px;
+  margin-bottom: 6px; font-weight: 700;
+}
+.finding-section > div:not(.label):not(.evidence-box) { color: var(--text-secondary); line-height: 1.6; }
+
+/* ---------- Code / evidence blocks (terminal look) ---------- */
 code, .evidence-box {
-  background: #0b0c0d;
+  background: #0c0d10;
   border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
   display: block;
   font-size: 12.5px;
-  font-family: 'Consolas', 'SF Mono', 'Fira Code', monospace;
-  color: #d7c07a;
+  font-family: 'SF Mono', 'Consolas', 'Fira Code', monospace;
+  color: #e0c780;
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-all;
+  line-height: 1.55;
 }
-.poc-section { border-top: 1px dashed var(--border); padding-top: 12px; margin-top: 14px; }
+.poc-section { border-top: 1px solid var(--border-soft); padding-top: 14px; margin-top: 16px; }
 .poc-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .copy-btn {
+  display: inline-flex; align-items: center; gap: 6px;
   background: var(--panel-alt);
   border: 1px solid var(--border);
   color: var(--muted);
   font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-  padding: 4px 10px;
-  border-radius: 5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-family: inherit;
-  transition: border-color .12s ease, color .12s ease;
+  transition: border-color .15s var(--ease), color .15s var(--ease), background .15s var(--ease);
 }
-.copy-btn:hover { border-color: var(--accent); color: var(--accent-soft); }
-.copy-btn.copied { border-color: #7f9e7a; color: #a8c4a3; }
+.copy-btn:hover { border-color: var(--accent); color: var(--accent-soft); background: var(--accent-dim); }
+.copy-btn.copied { border-color: #5fa876; color: #8fd1a4; background: rgba(95,168,118,.12); }
 pre.poc {
-  background: #0b0c0d;
-  border: 1px solid #3a3626;
-  border-left: 3px solid #93a56e;
-  border-radius: 5px;
-  padding: 12px 16px;
+  position: relative;
+  background: #0c0d10;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 14px 18px;
   font-size: 12px;
-  line-height: 1.65;
-  color: #b9d0a8;
+  line-height: 1.7;
+  color: #c7d6bd;
   white-space: pre-wrap;
   word-break: break-word;
-  margin: 8px 0 0 0;
-  font-family: 'Consolas', 'SF Mono', 'Fira Code', monospace;
+  margin: 10px 0 0 0;
+  font-family: 'SF Mono', 'Consolas', 'Fira Code', monospace;
 }
 details.files-details { margin: 0; }
 details.files-details > summary {
-  cursor: pointer; list-style: none; color: var(--muted); font-size: 12px;
-  padding: 4px 0; user-select: none;
+  cursor: pointer; list-style: none; color: var(--accent-soft); font-size: 12px; font-weight: 600;
+  padding: 5px 0; user-select: none; display: flex; align-items: center; gap: 6px;
 }
 details.files-details > summary::-webkit-details-marker { display: none; }
-details.files-details > summary:before { content: "\\25B8  "; color: var(--accent); }
-details.files-details[open] > summary:before { content: "\\25BE  "; }
-ul.file-list {
-  margin: 8px 0 0 0; padding: 10px 14px; list-style: none;
-  background: #0b0c0d; border: 1px solid var(--border); border-radius: 5px;
-  max-height: 260px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 11.5px; color: #c7cbd1;
+details.files-details > summary::before {
+  content: ""; width: 6px; height: 6px;
+  border-right: 2px solid var(--accent-soft); border-bottom: 2px solid var(--accent-soft);
+  transform: rotate(-45deg); transition: transform .2s var(--ease); display: inline-block;
 }
-ul.file-list li { padding: 2px 0; border-bottom: 1px solid #2c2620; word-break: break-all; }
+details.files-details[open] > summary::before { transform: rotate(45deg); }
+ul.file-list {
+  margin: 10px 0 0 0; padding: 12px 16px; list-style: none;
+  background: #0c0d10; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  max-height: 260px; overflow-y: auto; font-family: 'SF Mono', monospace; font-size: 11.5px; color: var(--text-secondary);
+}
+ul.file-list li { padding: 4px 0; border-bottom: 1px solid var(--border-soft); word-break: break-all; }
 ul.file-list li:last-child { border-bottom: none; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .tags span {
   display: inline-block;
   background: var(--panel-alt);
-  color: var(--muted);
+  color: var(--text-secondary);
   font-size: 10px;
-  padding: 3px 9px;
-  border-radius: 10px;
-  margin-right: 6px;
-  margin-top: 4px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 20px;
   border: 1px solid var(--border);
+  transition: border-color .15s var(--ease), color .15s var(--ease);
 }
-.confidence-low { opacity: 0.72; }
-footer { color: var(--muted); font-size: 11px; margin-top: 34px; border-top: 1px solid var(--border); padding-top: 16px; text-align: center; }
-.empty-state { text-align: center; color: var(--muted); padding: 40px 0; font-size: 13px; }
+.tags span:hover { border-color: var(--accent); color: var(--accent-soft); }
+.confidence-low { opacity: 0.76; }
+footer {
+  color: var(--muted); font-size: 11.5px; margin-top: 44px; border-top: 1px solid var(--border);
+  padding-top: 20px; text-align: center; letter-spacing: .1px;
+}
+.empty-state {
+  text-align: center; color: var(--muted); padding: 56px 0; font-size: 13px;
+  border: 1px dashed var(--border); border-radius: var(--radius-lg);
+}
 @media (max-width: 760px) {
   .dashboard-grid { grid-template-columns: 1fr; }
   .heatmap { grid-template-columns: repeat(2, 1fr); }
+  .wrap { padding: 28px 18px 48px; }
+}
+
+/* ---------- Print ---------- */
+@media print {
+  body { background: #ffffff !important; color: #111 !important; }
+  .wrap { max-width: 100%; padding: 0 12px; }
+  .toolbar, .copy-btn { display: none !important; }
+  details { break-inside: avoid; }
+  details.module-section, .finding, .dash-panel, .summary-card, .risk-banner {
+    box-shadow: none !important; border: 1px solid #ccc !important; background: #fff !important;
+  }
+  details.module-section > summary { background: #f4f4f4 !important; }
+  code, .evidence-box, pre.poc, ul.file-list { background: #f6f6f6 !important; color: #222 !important; border-color: #ccc !important; }
+  .finding-title, .module-title, header h1 { color: #111 !important; }
+  .finding-meta, .dash-panel div, .toolbar .count-label { color: #444 !important; }
 }
 """
 
@@ -371,11 +563,14 @@ def _render_summary(counts: dict) -> str:
     cards = []
     for sev, count in counts.items():
         color = SEVERITY_COLORS.get(sev, "#8b8f96")
+        gradient = _severity_gradient(sev)
         cards.append(
-            f'<div class="summary-card" style="border-top: 3px solid {color};" '
+            f'<div class="summary-card" '
             f'onclick="filterBySeverity(\'{sev}\', this)">'
+            f'<div class="card-accent" style="background:{gradient};"></div>'
+            f'<div class="card-body">'
             f'<div class="count" style="color:{color}">{count}</div>'
-            f'<div class="label">{_esc(sev)}</div></div>'
+            f'<div class="label">{_esc(sev)}</div></div></div>'
         )
     return f'<div class="summary">{"".join(cards)}</div>'
 
@@ -397,7 +592,7 @@ def _render_risk_banner(counts: dict) -> str:
         level, icon, color, bg = "No Significant Risk", "\u2713", "#93a56e", "#1e2419"
         sub = "No findings above informational severity were identified in this scan."
     return f"""<div class="risk-banner" style="background:{bg}; border-color:{color}44;">
-  <div class="risk-icon" style="color:{color};">{icon}</div>
+  <div class="risk-icon-circle" style="background:linear-gradient(135deg, {color}, {color}99); color:#12131a;">{icon}</div>
   <div>
     <div class="risk-title" style="color:{color};">{_esc(level)}</div>
     <div class="risk-sub">{_esc(sub)}</div>
@@ -418,7 +613,7 @@ def _render_dashboard(findings: list[dict], counts: dict) -> str:
         "credential", "database", "auto-update", "signature", "dependency-graph", "named-pipe", "registry-key", "url"
     }})
     heat_cells = "".join(
-        f'<div class="heat-cell" style="background:{SEVERITY_COLORS.get(sev, "#8b8f96")}">'
+        f'<div class="heat-cell" style="background:{_severity_gradient(sev)}">'
         f'<span class="heat-label">{_esc(sev)}</span><span class="heat-count">{_esc(count)}</span></div>'
         for sev, count in counts.items()
     )
@@ -445,6 +640,8 @@ def _group_findings(findings: list[dict]) -> list[dict]:
 
 def _render_finding(f: dict, idx: int) -> str:
     color = SEVERITY_COLORS.get(f["severity"], "#8b8f96")
+    gradient = _severity_gradient(f["severity"])
+    glyph = SEVERITY_GLYPHS.get(f["severity"], "\u25CF")
     conf_class = "confidence-low" if f.get("confidence") == "Low" else ""
     tags_html = "".join(f"<span>{_esc(t)}</span>" for t in f.get("tags", []))
     mitre_html = ", ".join(_mapped_values(f, MITRE_BY_TAG))
@@ -502,9 +699,9 @@ def _render_finding(f: dict, idx: int) -> str:
   </div>"""
 
     return f"""
-<div class="finding {conf_class}" id="finding-{idx}" style="border-left-color:{color};" data-severity="{_esc(f['severity'])}" data-search="{search_blob}">
+<div class="finding {conf_class}" id="finding-{idx}" style="--finding-accent:{gradient};" data-severity="{_esc(f['severity'])}" data-search="{search_blob}">
   <div class="finding-header">
-    <span class="badge" style="background:{color};">{_esc(f['severity'])}</span>
+    <span class="badge" style="background:{gradient};"><span class="glyph">{glyph}</span>{_esc(f['severity'])}</span>
     <span class="finding-title">{_esc(f['title'])}</span>
     {affected_badge}
   </div>
@@ -540,7 +737,7 @@ def _render_module_section(module: str, findings: list[dict], start_idx: int, op
     for f in findings:
         sev_counts[f["severity"]] = sev_counts.get(f["severity"], 0) + 1
     dots = "".join(
-        f'<span style="background:{SEVERITY_COLORS.get(s, "#8b8f96")};" title="{_esc(s)}: {c}"></span>'
+        f'<span style="background:{_severity_gradient(s)};" title="{_esc(s)}: {c}"></span>'
         for s, c in sorted(sev_counts.items(), key=lambda kv: SEVERITY_ORDER.index(kv[0]) if kv[0] in SEVERITY_ORDER else 99)
     )
     findings_html = "".join(_render_finding(f, start_idx + i) for i, f in enumerate(findings))
@@ -603,11 +800,15 @@ def generate_html_report(result: ScanResult, output_path: str | Path) -> Path:
 <body>
 <div class="wrap">
 <header>
-  <div class="brand">{_BRAND_SVG}<h1>Warden &mdash; Static Security Analysis Report</h1></div>
-  <div class="meta">
-    Target: <b>{_esc(meta.target_path)}</b><br>
-    Scan started: {_esc(meta.started_at)} &middot; finished: {_esc(meta.finished_at)}<br>
-    Files scanned: <b>{_esc(meta.files_scanned)}</b> &middot; Grouped findings: <b>{len(findings)}</b> &middot; Tool version: {_esc(meta.tool_version)}
+  <div class="brand">{_BRAND_SVG}<div><div class="eyebrow">Static Security Assessment Report</div><h1>Warden</h1></div></div>
+  <div class="subtitle">Static security analysis for thick-client applications</div>
+  <div class="meta-grid">
+    <div class="meta-item"><div class="meta-label">Target</div><div class="meta-value mono">{_esc(meta.target_path)}</div></div>
+    <div class="meta-item"><div class="meta-label">Scan Started</div><div class="meta-value">{_esc(meta.started_at)}</div></div>
+    <div class="meta-item"><div class="meta-label">Scan Finished</div><div class="meta-value">{_esc(meta.finished_at)}</div></div>
+    <div class="meta-item"><div class="meta-label">Files Scanned</div><div class="meta-value">{_esc(meta.files_scanned)}</div></div>
+    <div class="meta-item"><div class="meta-label">Grouped Findings</div><div class="meta-value">{len(findings)}</div></div>
+    <div class="meta-item"><div class="meta-label">Tool Version</div><div class="meta-value">{_esc(meta.tool_version)}</div></div>
   </div>
 </header>
 {_render_risk_banner(counts)}

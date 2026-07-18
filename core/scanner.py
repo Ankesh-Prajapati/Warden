@@ -76,7 +76,7 @@ def run_scan(
     single_file: str | Path | None = None,
     vt_api_key: str | None = None,
     vt_include_clean: bool = False,
-    vt_max_lookups: int = 40,
+    vt_max_lookups: int = 15,
     vt_upload_unknown: bool = False,
     progress_callback=None,
     error_callback=None,

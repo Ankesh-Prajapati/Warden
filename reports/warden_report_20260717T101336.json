@@ -1,0 +1,649 @@
+{
+  "metadata": {
+    "target_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+    "started_at": "2026-07-17T10:13:32.300916+00:00",
+    "finished_at": "2026-07-17T10:13:36.567619+00:00",
+    "files_scanned": 4,
+    "tool_version": "0.1.0"
+  },
+  "summary": {
+    "Critical": 0,
+    "High": 0,
+    "Medium": 3,
+    "Low": 3,
+    "Info": 10
+  },
+  "findings": [
+    {
+      "module": "secrets",
+      "rule_id": "high-entropy-string",
+      "title": "High-entropy string (possible unrecognized secret)",
+      "severity": "Medium",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "0123456789abcdefghijklmnopqrstuvwxyz",
+      "description": "A string with unusually high randomness (Shannon entropy) was found, which often indicates an API key, token, or password that doesn't match a known vendor pattern. (Extracted from embedded strings inside a PE binary.)",
+      "remediation": "Manually review this value. If it is a credential or token, remove it from the file, rotate it, and load it via a secrets manager or environment variable instead.",
+      "poc": "1. Extract printable strings from the binary directly to confirm independently:\n   Windows (Sysinternals strings.exe):\n     strings64.exe -n 6 \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | findstr /i \"01234567\"\n   Linux:\n     strings -n 6 \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | grep -i '01234567'\n\n2. Open eset_smart_security_premium_live_installer.exe in a PE viewer (CFF Explorer, Detect It Easy, or IDA/Ghidra) and locate the string in the resource/data section to confirm it is not dead code or a leftover debug string.\n\n3. If confirmed live, treat this the same as a config-file secret: rotate the credential and remove it from the compiled binary \u2014 hardcoded strings in compiled code are trivially recoverable with basic reverse-engineering tools regardless of packing.\n\n4. Evidence: 0123456789abcdefghijklmnopqrstuvwxyz",
+      "line_number": 244,
+      "offset": null,
+      "tags": [
+        "entropy",
+        "embedded-in-binary",
+        "generic"
+      ],
+      "confidence": "Low",
+      "extra": {
+        "context": "   242 | GetTempPath2W\n   243 | bad exception\n>> 244 | 0123456789abcdefghijklmnopqrstuvwxyz\n   245 | 0123456789abcdefghijklmnopqrstuvwxyz\n   246 | GetSystemTimePreciseAsFileTime"
+      },
+      "fingerprint": "71baa679cfff2a66"
+    },
+    {
+      "module": "secrets",
+      "rule_id": "high-entropy-string",
+      "title": "High-entropy string (possible unrecognized secret)",
+      "severity": "Medium",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "description": "A string with unusually high randomness (Shannon entropy) was found, which often indicates an API key, token, or password that doesn't match a known vendor pattern. (Extracted from embedded strings inside a PE binary.)",
+      "remediation": "Manually review this value. If it is a credential or token, remove it from the file, rotate it, and load it via a secrets manager or environment variable instead.",
+      "poc": "1. Extract printable strings from the binary directly to confirm independently:\n   Windows (Sysinternals strings.exe):\n     strings64.exe -n 6 \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | findstr /i \"ABCDEFGH\"\n   Linux:\n     strings -n 6 \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | grep -i 'ABCDEFGH'\n\n2. Open eset_smart_security_premium_live_installer.exe in a PE viewer (CFF Explorer, Detect It Easy, or IDA/Ghidra) and locate the string in the resource/data section to confirm it is not dead code or a leftover debug string.\n\n3. If confirmed live, treat this the same as a config-file secret: rotate the credential and remove it from the compiled binary \u2014 hardcoded strings in compiled code are trivially recoverable with basic reverse-engineering tools regardless of packing.\n\n4. Evidence: ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "line_number": 322,
+      "offset": null,
+      "tags": [
+        "entropy",
+        "embedded-in-binary",
+        "generic"
+      ],
+      "confidence": "Low",
+      "extra": {
+        "context": "   320 | (null)\n   321 |  !\"#$%&'()*+,-./0123456789:;<=>?@abcdefghijklmnopqrstuvwxyz[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\n>> 322 |  !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`ABCDEFGHIJKLMNOPQRSTUVWXYZ{|}~\n   323 | CorExitProcess\n   324 |  !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+      },
+      "fingerprint": "44154d4458a48f5d"
+    },
+    {
+      "module": "secrets",
+      "rule_id": "high-entropy-string",
+      "title": "High-entropy string (possible unrecognized secret)",
+      "severity": "Medium",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "com/DigiCertTrustedG4CodeSigningRSA4096SHA3842021CA1",
+      "description": "A string with unusually high randomness (Shannon entropy) was found, which often indicates an API key, token, or password that doesn't match a known vendor pattern. (Extracted from embedded strings inside a PE binary.)",
+      "remediation": "Manually review this value. If it is a credential or token, remove it from the file, rotate it, and load it via a secrets manager or environment variable instead.",
+      "poc": "1. Extract printable strings from the binary directly to confirm independently:\n   Windows (Sysinternals strings.exe):\n     strings64.exe -n 6 \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | findstr /i \"com/Digi\"\n   Linux:\n     strings -n 6 \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | grep -i 'com/Digi'\n\n2. Open eset_smart_security_premium_live_installer.exe in a PE viewer (CFF Explorer, Detect It Easy, or IDA/Ghidra) and locate the string in the resource/data section to confirm it is not dead code or a leftover debug string.\n\n3. If confirmed live, treat this the same as a config-file secret: rotate the credential and remove it from the compiled binary \u2014 hardcoded strings in compiled code are trivially recoverable with basic reverse-engineering tools regardless of packing.\n\n4. Evidence: com/DigiCertTrustedG4CodeSigningRSA4096SHA3842021CA1",
+      "line_number": 19253,
+      "offset": null,
+      "tags": [
+        "entropy",
+        "embedded-in-binary",
+        "generic"
+      ],
+      "confidence": "Low",
+      "extra": {
+        "context": "   19251 | ESET, spol. s r.o.1\n   19252 | ESET, spol. s r.o.0\n>> 19253 | Mhttp://crl3.digicert.com/DigiCertTrustedG4CodeSigningRSA4096SHA3842021CA1.crl0S\n   19254 | Mhttp://crl4.digicert.com/DigiCertTrustedG4CodeSigningRSA4096SHA3842021CA1.crl0=\n   19255 | http://www.digicert.com/CPS0"
+      },
+      "fingerprint": "639fdb6a9db35d73"
+    },
+    {
+      "module": "secrets",
+      "rule_id": "high-entropy-string",
+      "title": "High-entropy string (possible unrecognized secret)",
+      "severity": "Medium",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "com/DigiCertTrustedG4TimeStampingRSA4096SHA2562025CA1",
+      "description": "A string with unusually high randomness (Shannon entropy) was found, which often indicates an API key, token, or password that doesn't match a known vendor pattern. (Extracted from embedded strings inside a PE binary.)",
+      "remediation": "Manually review this value. If it is a credential or token, remove it from the file, rotate it, and load it via a secrets manager or environment variable instead.",
+      "poc": "1. Extract printable strings from the binary directly to confirm independently:\n   Windows (Sysinternals strings.exe):\n     strings64.exe -n 6 \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | findstr /i \"com/Digi\"\n   Linux:\n     strings -n 6 \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | grep -i 'com/Digi'\n\n2. Open eset_smart_security_premium_live_installer.exe in a PE viewer (CFF Explorer, Detect It Easy, or IDA/Ghidra) and locate the string in the resource/data section to confirm it is not dead code or a leftover debug string.\n\n3. If confirmed live, treat this the same as a config-file secret: rotate the credential and remove it from the compiled binary \u2014 hardcoded strings in compiled code are trivially recoverable with basic reverse-engineering tools regardless of packing.\n\n4. Evidence: com/DigiCertTrustedG4TimeStampingRSA4096SHA2562025CA1",
+      "line_number": 19306,
+      "offset": null,
+      "tags": [
+        "entropy",
+        "embedded-in-binary",
+        "generic"
+      ],
+      "confidence": "Low",
+      "extra": {
+        "context": "   19304 | p%w+q4\n   19305 | http://ocsp.digicert.com0]\n>> 19306 | Qhttp://cacerts.digicert.com/DigiCertTrustedG4TimeStampingRSA4096SHA2562025CA1.crt0_\n   19307 | Nhttp://crl3.digicert.com/DigiCertTrustedG4TimeStampingRSA4096SHA2562025CA1.crl0 \n   19308 | r&fR{a|"
+      },
+      "fingerprint": "3132650c46a32b64"
+    },
+    {
+      "module": "signature",
+      "rule_id": "insecure-auto-update-indicator",
+      "title": "Possible auto-update mechanism without signature verification",
+      "severity": "Medium",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "Update-related string matched ('update'); no WinVerifyTrust/CryptQueryObject-style import found",
+      "description": "This binary contains strings suggesting an update/version-check mechanism, but does not import any Windows API commonly used to verify a downloaded payload's signature before execution. This is a static heuristic, not proof of an exploitable auto-update flaw \u2014 confirm manually by reviewing the update flow (ideally with source or a decompiler).",
+      "remediation": "Ensure any auto-update mechanism verifies the downloaded payload's Authenticode signature (e.g. via WinVerifyTrust) and expected publisher before executing it, and serves updates over TLS with certificate validation enabled.",
+      "poc": "1. Confirm the update-related string directly:\n     strings -n 6 \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | grep -i 'update'\n   (Windows: strings64.exe -n 6 \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | findstr /i \"update\")\n\n2. Confirm the import table lacks trust-verification APIs:\n     dumpbin /imports \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | findstr /i \"WinVerifyTrust CryptQueryObject\"\n   (expect no output if this finding is accurate)\n\n3. Dynamic confirmation (requires a controlled test environment and, if the update server is client-owned, written authorization): intercept the update check/download with a proxy (Burp/mitmproxy) and serve a modified payload with a valid file structure but altered content. If the application executes the modified payload without rejecting it, this confirms the updater does not verify payload integrity/authenticity before execution.\n\n4. If dynamic testing is out of scope for this engagement, report this as a static indicator requiring source-level or decompiled confirmation of the actual update-verification logic before treating it as a confirmed (rather than potential) finding.",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "signature",
+        "auto-update",
+        "heuristic"
+      ],
+      "confidence": "Low",
+      "extra": {},
+      "fingerprint": "5b6bcd6f75d21ea6"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "manifest-privilege-settings",
+      "title": "Manifest privilege settings detected",
+      "severity": "Medium",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "requestedexecutionlevel, uiaccess",
+      "description": "The embedded manifest references requestedExecutionLevel, autoElevate, uiAccess, or related privilege-affecting settings.",
+      "remediation": "Use the lowest required requestedExecutionLevel, avoid autoElevate unless explicitly needed and properly signed/trusted, and ensure uiAccess is only enabled for approved assistive UI scenarios.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "binary",
+        "manifest",
+        "privilege"
+      ],
+      "confidence": "High",
+      "extra": {
+        "manifest": "\ufeff<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\"><dependency><dependentAssembly><assemblyIdentity type=\"win32\" name=\"Microsoft.Windows.Common-Controls\" version=\"6.0.0.0\" processorArchitecture=\"x86\" publicKeyToken=\"6595b64144ccf1df\"></assemblyIdentity></dependentAssembly></dependency><dependency><dependentAssembly><assemblyIdentity type=\"win32\" name=\"Microsoft.Windows.Common-Controls\" version=\"6.0.0.0\" processorArchitecture=\"*\" publicKeyToken=\"6595b64144ccf1df\" language=\"*\"></assemblyIdentity></dependentAssembly></dependency><trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\"><security><requestedPrivileges><requestedExecutionLevel level=\"asInvoker\" uiAccess=\"false\"></requestedExecutionLevel></requestedPrivileges></security></trustInfo><application xmlns=\"urn:schemas-microsoft-com:asm.v3\"><windowsSettings><heapType xmlns=\"http://schemas.microsoft.com/SMI/2020/WindowsSettings\">SegmentHeap</heapType></windowsSettings></application><ms_compatibility:compatibility xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" xmlns=\"urn:schemas-microsoft-com:compatibility.v1\"><ms_compatibility:application xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\"><ms_compatibility:supportedOS xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" Id=\"{e2011457-1546-43c5-a5fe-008deee3d3f0}\"></ms_compatibility:supportedOS><ms_compatibility:supportedOS xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" Id=\"{35138b9a-5d96-4fbd-8e2d-a2440225f93a}\"></ms_compatibility:supportedOS><ms_compatibility:supportedOS xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" Id=\"{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}\"></ms_compatibility:supportedOS><ms_compatibility:supportedOS xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" Id=\"{1f676c76-80e1-4239-95bb-83d0f6d0da78}\"></ms_compatibility:supportedOS><ms_compatibility:supportedOS xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" Id=\"{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}\"></ms_compatibility:supportedOS></ms_compatibility:application></ms_compatibility:compatibility></assembly>"
+      },
+      "fingerprint": "1e35a3b01941f7a7"
+    },
+    {
+      "module": "secrets",
+      "rule_id": "hardcoded-ip",
+      "title": "Hardcoded IPv4 address",
+      "severity": "Low",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "6.0.0.0",
+      "description": "Pattern matching rule 'hardcoded-ip' (Hardcoded IPv4 address) was found in this file. (Extracted from embedded strings inside a PE binary.)",
+      "remediation": "Remove hardcoded credentials/secrets from source and configuration files. Use a secrets manager (Azure Key Vault, AWS Secrets Manager, HashiCorp Vault) or environment variables injected at runtime, and rotate the exposed credential immediately.",
+      "poc": "1. Extract printable strings from the binary directly to confirm independently:\n   Windows (Sysinternals strings.exe):\n     strings64.exe -n 6 \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | findstr /i \"6.0.0.0\"\n   Linux:\n     strings -n 6 \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | grep -i '6.0.0.0'\n\n2. Open eset_smart_security_premium_live_installer.exe in a PE viewer (CFF Explorer, Detect It Easy, or IDA/Ghidra) and locate the string in the resource/data section to confirm it is not dead code or a leftover debug string.\n\n3. If confirmed live, treat this the same as a config-file secret: rotate the credential and remove it from the compiled binary \u2014 hardcoded strings in compiled code are trivially recoverable with basic reverse-engineering tools regardless of packing.\n\n4. Evidence: 6.0.0.0",
+      "line_number": 18853,
+      "offset": null,
+      "tags": [
+        "infra",
+        "embedded-in-binary",
+        "recon"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "context": "   18851 | .res\\liveinstaller\\print.htmPK\n   18852 | <?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n>> 18853 | <assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\"><dependency><dependentAssembly><assemblyIdentity type=\"win32\" name=\"Microsoft.Windows.Common-Controls\" version=\"6.0.0.0\" proces \u2026(truncated)\n   18854 | 0!060D0o0{0\n   18855 | 1$1*1/151:1?1E1N1U1Z1_1t1y1"
+      },
+      "fingerprint": "3f4174dffb411da3"
+    },
+    {
+      "module": "secrets",
+      "rule_id": "hardcoded-ip",
+      "title": "Hardcoded IPv4 address",
+      "severity": "Low",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "19.0.3.0",
+      "description": "Pattern matching rule 'hardcoded-ip' (Hardcoded IPv4 address) was found in this file. (Extracted from embedded strings inside a PE binary.)",
+      "remediation": "Remove hardcoded credentials/secrets from source and configuration files. Use a secrets manager (Azure Key Vault, AWS Secrets Manager, HashiCorp Vault) or environment variables injected at runtime, and rotate the exposed credential immediately.",
+      "poc": "1. Extract printable strings from the binary directly to confirm independently:\n   Windows (Sysinternals strings.exe):\n     strings64.exe -n 6 \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | findstr /i \"19.0.3.0\"\n   Linux:\n     strings -n 6 \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | grep -i '19.0.3.0'\n\n2. Open eset_smart_security_premium_live_installer.exe in a PE viewer (CFF Explorer, Detect It Easy, or IDA/Ghidra) and locate the string in the resource/data section to confirm it is not dead code or a leftover debug string.\n\n3. If confirmed live, treat this the same as a config-file secret: rotate the credential and remove it from the compiled binary \u2014 hardcoded strings in compiled code are trivially recoverable with basic reverse-engineering tools regardless of packing.\n\n4. Evidence: 19.0.3.0",
+      "line_number": 20907,
+      "offset": null,
+      "tags": [
+        "infra",
+        "embedded-in-binary",
+        "recon"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "context": "   20905 | ESET Security\n   20906 | ProductVersion\n>> 20907 | 19.0.3.0\n   20908 | VarFileInfo\n   20909 | Translation"
+      },
+      "fingerprint": "8710ab1b68b0c798"
+    },
+    {
+      "module": "secrets",
+      "rule_id": "hardcoded-ip",
+      "title": "Hardcoded IPv4 address",
+      "severity": "Low",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "10.60.20.0",
+      "description": "Pattern matching rule 'hardcoded-ip' (Hardcoded IPv4 address) was found in this file. (Extracted from embedded strings inside a PE binary.)",
+      "remediation": "Remove hardcoded credentials/secrets from source and configuration files. Use a secrets manager (Azure Key Vault, AWS Secrets Manager, HashiCorp Vault) or environment variables injected at runtime, and rotate the exposed credential immediately.",
+      "poc": "1. Extract printable strings from the binary directly to confirm independently:\n   Windows (Sysinternals strings.exe):\n     strings64.exe -n 6 \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | findstr /i \"10.60.20\"\n   Linux:\n     strings -n 6 \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | grep -i '10.60.20'\n\n2. Open eset_smart_security_premium_live_installer.exe in a PE viewer (CFF Explorer, Detect It Easy, or IDA/Ghidra) and locate the string in the resource/data section to confirm it is not dead code or a leftover debug string.\n\n3. If confirmed live, treat this the same as a config-file secret: rotate the credential and remove it from the compiled binary \u2014 hardcoded strings in compiled code are trivially recoverable with basic reverse-engineering tools regardless of packing.\n\n4. Evidence: 10.60.20.0",
+      "line_number": 20917,
+      "offset": null,
+      "tags": [
+        "infra",
+        "embedded-in-binary",
+        "recon"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "context": "   20915 | ESET Live Installer\n   20916 | FileVersion\n>> 20917 | 10.60.20.0\n   20918 | InternalName\n   20919 | Bootstrapper.exe"
+      },
+      "fingerprint": "638a21513f7ac71a"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "high-entropy-section",
+      "title": "High-entropy PE section (possible unrecognized packer/encryption)",
+      "severity": "Low",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "Section(s) with entropy >= 7.2: .rsrc (7.989)",
+      "description": "One or more sections show entropy consistent with compression or encryption, but no known packer signature matched. This can indicate a custom/unknown packer, encrypted resources, or simply compressed embedded assets (icons, installers) \u2014 manual review recommended to distinguish these cases.",
+      "remediation": "Manually inspect the high-entropy section(s) to determine whether they contain packed code, encrypted data, or compressed assets.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "re-exposure",
+        "packer",
+        "entropy"
+      ],
+      "confidence": "Low",
+      "extra": {},
+      "fingerprint": "e65a02156e01e431"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "embedded-pdb-path-leak",
+      "title": "Embedded PDB debug path leakage",
+      "severity": "Low",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "PDB path: BootContainer.pdb",
+      "description": "This binary embeds a full path to its PDB debug symbol file, typically left over from an unstripped release build. This commonly leaks internal developer machine usernames, build server directory structure, or internal project naming conventions \u2014 minor but free reconnaissance information for an attacker profiling the target organization's build environment.",
+      "remediation": "Strip debug directory entries from release builds, or use /PDBALTPATH with a generic relative path so no internal filesystem information is embedded in shipped binaries.",
+      "poc": "1. Confirm directly:\n     dumpbin /headers \"C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe\" | findstr /i pdb\n   or with pefile:\n     python3 -c \"import pefile; pe=pefile.PE(r'C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe'); pe.parse_data_directories(); print(pe.DIRECTORY_ENTRY_DEBUG[0].entry.PdbFileName)\"\n\n2. Review the leaked path for anything organizationally sensitive: 'BootContainer.pdb' \u2014 note the OS username, drive layout, and any internal project/codename it reveals for the client report.",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "re-exposure",
+        "pdb-leak",
+        "recon"
+      ],
+      "confidence": "High",
+      "extra": {},
+      "fingerprint": "85b730e969d545dd"
+    },
+    {
+      "module": "secrets",
+      "rule_id": "acl-check-limited",
+      "title": "ACL inspection limited on this platform",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "Running on Windows without ACL inspection enabled; only basic attributes checked. Use icacls for authoritative ACL review.",
+      "description": "Static ACL review was limited; verify manually.",
+      "remediation": "Run `icacls <file>` on the target Windows host to confirm effective permissions.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "permissions",
+        "acl",
+        "gap"
+      ],
+      "confidence": "Low",
+      "extra": {},
+      "fingerprint": "e0e580c113cd58f7"
+    },
+    {
+      "module": "signature",
+      "rule_id": "certificate-chain-summary",
+      "title": "Certificate chain extracted",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "DigiCert Trusted Root G4 (issuer: DigiCert Assured ID Root CA) -> DigiCert Trusted G4 Code Signing RSA4096 SHA384 2021 CA1 (issuer: DigiCert Trusted Root G4) -> ESET, spol. s r.o. (issuer: DigiCert Trusted G4 Code Signing RSA4096 SHA384 2021 CA1)",
+      "description": "Warden extracted the Authenticode certificate chain for publisher and trust review.",
+      "remediation": "Verify the leaf publisher is expected, the chain terminates at a trusted CA, and the certificate is appropriate for production code signing.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "signature",
+        "certificate-chain"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "certificate_chain": [
+          {
+            "subject_cn": "DigiCert Trusted Root G4",
+            "issuer_cn": "DigiCert Assured ID Root CA",
+            "not_valid_before": "2022-08-01T00:00:00+00:00",
+            "not_valid_after": "2031-11-09T23:59:59+00:00",
+            "signature_hash_algorithm": "sha384",
+            "self_signed": false,
+            "is_expired": false,
+            "serial_number": "0xe9b188ef9d02de7efdb50e20840185a",
+            "is_ca": true
+          },
+          {
+            "subject_cn": "DigiCert Trusted G4 Code Signing RSA4096 SHA384 2021 CA1",
+            "issuer_cn": "DigiCert Trusted Root G4",
+            "not_valid_before": "2021-04-29T00:00:00+00:00",
+            "not_valid_after": "2036-04-28T23:59:59+00:00",
+            "signature_hash_algorithm": "sha384",
+            "self_signed": false,
+            "is_expired": false,
+            "serial_number": "0x8ad40b260d29c4c9f5ecda9bd93aed9",
+            "is_ca": true
+          },
+          {
+            "subject_cn": "ESET, spol. s r.o.",
+            "issuer_cn": "DigiCert Trusted G4 Code Signing RSA4096 SHA384 2021 CA1",
+            "not_valid_before": "2023-08-16T00:00:00+00:00",
+            "not_valid_after": "2026-08-16T23:59:59+00:00",
+            "signature_hash_algorithm": "sha256",
+            "self_signed": false,
+            "is_expired": false,
+            "serial_number": "0x331e2bf185b7feceef4392712a86d5e",
+            "is_ca": false
+          }
+        ]
+      },
+      "fingerprint": "f291d295dcd9b185"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "extracted-urls",
+      "title": "Extracted url indicators",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "http://cacerts.digicert.com/DigiCertAssuredIDRootCA.crt0E, http://cacerts.digicert.com/DigiCertTrustedG4CodeSigningRSA4096SHA3842021CA1.crt0, http://cacerts.digicert.com/DigiCertTrustedG4TimeStampingRSA4096SHA2562025CA1.crt0_, http://cacerts.digicert.com/DigiCertTrustedRootG4.crt0C, http://crl.microsoft.com/pki/crl/products/MicrosoftCodeVerifRoot.crl0, http://crl3.digicert.com/DigiCertAssuredIDRootCA.crl0, http://crl3.digicert.com/DigiCertTrustedG4CodeSigningRSA4096SHA3842021CA1.crl0S, http://crl3.digicert.com/DigiCertTrustedG4TimeStampingRSA4096SHA2562025CA1.crl0, http://crl3.digicert.com/DigiCertTrustedRootG4.crl0, http://crl4.digicert.com/DigiCertTrustedG4CodeSigningRSA4096SHA3842021CA1.crl0=",
+      "description": "Static string extraction found indicators useful for reverse engineering and attack-surface review.",
+      "remediation": "Review extracted indicators for unintended endpoints, internal paths, IPC channels, registry persistence, or environment-specific leakage.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "re-exposure",
+        "strings",
+        "url"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "url": [
+          "http://cacerts.digicert.com/DigiCertAssuredIDRootCA.crt0E",
+          "http://cacerts.digicert.com/DigiCertTrustedG4CodeSigningRSA4096SHA3842021CA1.crt0",
+          "http://cacerts.digicert.com/DigiCertTrustedG4TimeStampingRSA4096SHA2562025CA1.crt0_",
+          "http://cacerts.digicert.com/DigiCertTrustedRootG4.crt0C",
+          "http://crl.microsoft.com/pki/crl/products/MicrosoftCodeVerifRoot.crl0",
+          "http://crl3.digicert.com/DigiCertAssuredIDRootCA.crl0",
+          "http://crl3.digicert.com/DigiCertTrustedG4CodeSigningRSA4096SHA3842021CA1.crl0S",
+          "http://crl3.digicert.com/DigiCertTrustedG4TimeStampingRSA4096SHA2562025CA1.crl0",
+          "http://crl3.digicert.com/DigiCertTrustedRootG4.crl0",
+          "http://crl4.digicert.com/DigiCertTrustedG4CodeSigningRSA4096SHA3842021CA1.crl0=",
+          "http://ocsp.digicert.com0A",
+          "http://ocsp.digicert.com0C",
+          "http://ocsp.digicert.com0\\",
+          "http://ocsp.digicert.com0]",
+          "http://pki.eset.com/crl/csca2020.crl0I",
+          "http://pki.eset.com/crl/rootca2020.crl0?",
+          "http://pki.eset.com/crl/tsca2020.crl0?",
+          "http://pki.eset.com/crt/csca2020.crt05",
+          "http://pki.eset.com/crt/rootca2020.crt07",
+          "http://pki.eset.com/crt/tsca2020.crt05",
+          "http://pki.eset.com/csp0",
+          "http://schemas.microsoft.com/SMI/2020/WindowsSettings",
+          "http://www.digicert.com/CPS0"
+        ]
+      },
+      "fingerprint": "0a8ec75db196fd47"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "extracted-ips",
+      "title": "Extracted ip indicators",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "10.60.20.0, 19.0.3.0, 6.0.0.0",
+      "description": "Static string extraction found indicators useful for reverse engineering and attack-surface review.",
+      "remediation": "Review extracted indicators for unintended endpoints, internal paths, IPC channels, registry persistence, or environment-specific leakage.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "re-exposure",
+        "strings",
+        "ip"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "ip": [
+          "10.60.20.0",
+          "19.0.3.0",
+          "6.0.0.0"
+        ]
+      },
+      "fingerprint": "60cee51f4dd8c122"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "extracted-domains",
+      "title": "Extracted domain indicators",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "06.eT, 0W.AbR, 1.lNqL, 1m.ZWl, 2.ir, 3.XJQLS, 4.cx, 4Z.jp, 5.Oi, 5.VMN",
+      "description": "Static string extraction found indicators useful for reverse engineering and attack-surface review.",
+      "remediation": "Review extracted indicators for unintended endpoints, internal paths, IPC channels, registry persistence, or environment-specific leakage.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "re-exposure",
+        "strings",
+        "domain"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "domain": [
+          "06.eT",
+          "0W.AbR",
+          "1.lNqL",
+          "1m.ZWl",
+          "2.ir",
+          "3.XJQLS",
+          "4.cx",
+          "4Z.jp",
+          "5.Oi",
+          "5.VMN",
+          "5.zYz",
+          "59.lwa",
+          "6.gTe",
+          "6.qg",
+          "6AM.tC",
+          "6L.hw",
+          "6Z.AK",
+          "6t.Fp",
+          "7.Az",
+          "7.jFvQ",
+          "7w.bMR",
+          "8.HJ",
+          "8.KoT",
+          "8.QD",
+          "8.eF"
+        ]
+      },
+      "fingerprint": "ffb709ffa9e6ed4c"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "extracted-guids",
+      "title": "Extracted guid indicators",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "{00000000-0000-0000-0000-000000000000}, {1f676c76-80e1-4239-95bb-83d0f6d0da78}, {35138b9a-5d96-4fbd-8e2d-a2440225f93a}, {4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}, {8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}, {e2011457-1546-43c5-a5fe-008deee3d3f0}",
+      "description": "Static string extraction found indicators useful for reverse engineering and attack-surface review.",
+      "remediation": "Review extracted indicators for unintended endpoints, internal paths, IPC channels, registry persistence, or environment-specific leakage.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "re-exposure",
+        "strings",
+        "guid"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "guid": [
+          "{00000000-0000-0000-0000-000000000000}",
+          "{1f676c76-80e1-4239-95bb-83d0f6d0da78}",
+          "{35138b9a-5d96-4fbd-8e2d-a2440225f93a}",
+          "{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}",
+          "{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}",
+          "{e2011457-1546-43c5-a5fe-008deee3d3f0}"
+        ]
+      },
+      "fingerprint": "8c9da13b947d3760"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "interesting-strings",
+      "title": "Interesting strings extracted from binary",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "GetTokenInformation, IsDebuggerPresent, IsUserAnAdmin, OpenThreadToken, OpenProcessToken, OutputDebugStringW, <assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\"><dependency><dependentAssembly><assemblyIdentity type=\"win32\" name=\"Microsoft.Windows.Common-Controls\" version=\"6.0.0.0\" processorArchitecture=\"x86\" publicKeyToken=\"6595b64144ccf1df\"></assemblyIdentity></dependentAssembly></dependency><dependency><dependentAssembly><assemblyIdentity type=\"win32\" name=\"Microsoft.Windows.Common-Controls\" version=\"6.0.0.0\" processorArchitecture=\"*\" publicKeyToken=\"6595b64144ccf1df\" language=\"*\"></assemblyIdentity></dependentAssembly></dependency><trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\"><security><requestedPrivileges><requestedExecutionLevel level=\"asInvoker\" uiAccess=\"false\"></requestedExecutionLevel></requestedPrivileges></security></trustInfo><application xmlns=\"urn:schemas-microsoft-com:asm.v3\"><windowsSettings><heapType xmlns=\"http://schemas.microsoft.com/SMI/2020/WindowsSettings\">SegmentHeap</heapType></windowsSettings></application><ms_compatibility:compatibility xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" xmlns=\"urn:schemas-microsoft-com:compatibility.v1\"><ms_compatibility:application xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\"><ms_compatibility:supportedOS xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" Id=\"{e2011457-1546-43c5-a5fe-008deee3d3f0}\"></ms_compatibility:supportedOS><ms_compatibility:supportedOS xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" Id=\"{35138b9a-5d96-4fbd-8e2d-a2440225f93a}\"></ms_compatibility:supportedOS><ms_compatibility:supportedOS xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" Id=\"{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}\"></ms_compatibility:supportedOS><ms_compatibility:supportedOS xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" Id=\"{1f676c76-80e1-4239-95bb-83d0f6d0da78}\"></ms_compatibility:supportedOS><ms_compatibility:supportedOS xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" Id=\"{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}\"></ms_compatibility:supportedOS></ms_compatibility:application></ms_compatibility:compatibility></assembly>PAPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADD, Password,  pot tardar una estona.tEn cas d'error persistent, posa't en contacte amb l'administrador del sistema o amb l'equip de suport t,  chyby kontaktujte administr",
+      "description": "Strings with security-relevant keywords were found in the binary.",
+      "remediation": "Review these strings to confirm they do not leak credentials, debug behavior, or internal authorization logic.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "re-exposure",
+        "strings"
+      ],
+      "confidence": "Low",
+      "extra": {
+        "strings": [
+          "GetTokenInformation",
+          "IsDebuggerPresent",
+          "IsUserAnAdmin",
+          "OpenThreadToken",
+          "OpenProcessToken",
+          "OutputDebugStringW",
+          "<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\"><dependency><dependentAssembly><assemblyIdentity type=\"win32\" name=\"Microsoft.Windows.Common-Controls\" version=\"6.0.0.0\" processorArchitecture=\"x86\" publicKeyToken=\"6595b64144ccf1df\"></assemblyIdentity></dependentAssembly></dependency><dependency><dependentAssembly><assemblyIdentity type=\"win32\" name=\"Microsoft.Windows.Common-Controls\" version=\"6.0.0.0\" processorArchitecture=\"*\" publicKeyToken=\"6595b64144ccf1df\" language=\"*\"></assemblyIdentity></dependentAssembly></dependency><trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\"><security><requestedPrivileges><requestedExecutionLevel level=\"asInvoker\" uiAccess=\"false\"></requestedExecutionLevel></requestedPrivileges></security></trustInfo><application xmlns=\"urn:schemas-microsoft-com:asm.v3\"><windowsSettings><heapType xmlns=\"http://schemas.microsoft.com/SMI/2020/WindowsSettings\">SegmentHeap</heapType></windowsSettings></application><ms_compatibility:compatibility xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" xmlns=\"urn:schemas-microsoft-com:compatibility.v1\"><ms_compatibility:application xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\"><ms_compatibility:supportedOS xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" Id=\"{e2011457-1546-43c5-a5fe-008deee3d3f0}\"></ms_compatibility:supportedOS><ms_compatibility:supportedOS xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" Id=\"{35138b9a-5d96-4fbd-8e2d-a2440225f93a}\"></ms_compatibility:supportedOS><ms_compatibility:supportedOS xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" Id=\"{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}\"></ms_compatibility:supportedOS><ms_compatibility:supportedOS xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" Id=\"{1f676c76-80e1-4239-95bb-83d0f6d0da78}\"></ms_compatibility:supportedOS><ms_compatibility:supportedOS xmlns:ms_compatibility=\"urn:schemas-microsoft-com:compatibility.v1\" Id=\"{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}\"></ms_compatibility:supportedOS></ms_compatibility:application></ms_compatibility:compatibility></assembly>PAPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADDINGXXPADDINGPADD",
+          "Password",
+          " pot tardar una estona.tEn cas d'error persistent, posa't en contacte amb l'administrador del sistema o amb l'equip de suport t",
+          " chyby kontaktujte administr",
+          "Det kan tage et stykke tid.PKontakt din systemadministrator eller ESET-kundeservice, hvis fejlen forts",
+          "Anwendungsfehler Dies kann einige Minuten dauern.hFalls der Fehler weiterhin auftritt, wenden Sie sich an Ihren Systemadministrator oder den ESET-Support.VEin unerwarteter Fehler ist aufgetreten und die Anwendung kann nicht gestartet werden.",
+          "This may take a few moments.ZIn case of a persisting error contact your system administrator or ESET Technical Support.>An unexpected error occurred and the application cannot start.",
+          "ration peut prendre quelques minutes.ZEn cas d'erreur persistante, contactez l'administrateur syst",
+          "Dette kan ta noen minutter.UI tilfelle en vedvarende feil, kontakt systemadministratoren eller ESET brukerst",
+          " z administratorem systemu lub dzia",
+          "Isso pode levar alguns minutos.pNo caso de um erro persistente entre em contato com seu administrador do sistema ou Atendimento ao Cliente ESET.COcorreu um erro inesperado e n",
+          "i administratorul de sistem sau Serviciul pentru clien",
+          "ka ne otkloni, obratite se administratoru sustava ili korisni",
+          "r kontaktar du systemadministrat",
+          "Aplikasi gagal'Mungkin memerlukan waktu beberapa saat.YJika kesalahan terus berlanjut, hubungi administrator sistem atau Layanan Pelanggan ESET.ATerjadi kesalahan tidak terduga dan aplikasi tidak dapat dimulai.",
+          "steemiadministraatori v",
+          "mas administratoru vai ESET tehnisk",
+          " sistemos administratori",
+          "aju da se problem nastavi, obratite se administratoru sistema ili ESET korisni"
+        ]
+      },
+      "fingerprint": "6f2b64c13657e945"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "crypto-usage-detected",
+      "title": "Cryptographic library or algorithm usage detected",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "RSA, RC4",
+      "description": "Static imports/strings indicate cryptographic functionality such as AES, RSA, RC4, MD5, SHA1, bcrypt, or PBKDF2.",
+      "remediation": "Review crypto usage for modern algorithms, safe modes, key management, salting, and deprecation of MD5/SHA1/RC4.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "re-exposure",
+        "crypto"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "crypto": [
+          "RSA",
+          "RC4"
+        ]
+      },
+      "fingerprint": "3f73ffb4d1362123"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "compiler-framework-detected",
+      "title": "Compiler/framework indicators detected",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": ".NET",
+      "description": "Static imports/strings indicate the likely compiler, runtime, or framework family.",
+      "remediation": "Use the detected framework to choose appropriate review tooling such as ILSpy for .NET, Go/ReSym tooling, Java decompilers, or Electron ASAR inspection.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "re-exposure",
+        "framework"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "frameworks": [
+          ".NET"
+        ]
+      },
+      "fingerprint": "86710ba02aa293ab"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "binary-dependency-graph",
+      "title": "Binary dependency graph generated from imports",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\eset_smart_security_premium_live_installer.exe",
+      "evidence": "RPCRT4.dll, KERNEL32.dll, USER32.dll, GDI32.dll, ADVAPI32.dll, SHELL32.dll, ole32.dll, gdiplus.dll",
+      "description": "Imported DLLs were converted into a dependency graph for attack-surface and DLL search-order review.",
+      "remediation": "Review unexpected dependencies, unsigned third-party DLLs, and any imports that may be loaded from writable directories.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "binary",
+        "dependency-graph",
+        "imports"
+      ],
+      "confidence": "High",
+      "extra": {
+        "edges": [
+          [
+            "eset_smart_security_premium_live_installer.exe",
+            "RPCRT4.dll"
+          ],
+          [
+            "eset_smart_security_premium_live_installer.exe",
+            "KERNEL32.dll"
+          ],
+          [
+            "eset_smart_security_premium_live_installer.exe",
+            "USER32.dll"
+          ],
+          [
+            "eset_smart_security_premium_live_installer.exe",
+            "GDI32.dll"
+          ],
+          [
+            "eset_smart_security_premium_live_installer.exe",
+            "ADVAPI32.dll"
+          ],
+          [
+            "eset_smart_security_premium_live_installer.exe",
+            "SHELL32.dll"
+          ],
+          [
+            "eset_smart_security_premium_live_installer.exe",
+            "ole32.dll"
+          ],
+          [
+            "eset_smart_security_premium_live_installer.exe",
+            "gdiplus.dll"
+          ]
+        ]
+      },
+      "fingerprint": "1f7a1463d48af2d1"
+    }
+  ],
+  "module_errors": []
+}
