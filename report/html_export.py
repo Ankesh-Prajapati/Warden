@@ -126,6 +126,47 @@ _STYLE = """
   --shadow-card-hover: 0 2px 4px rgba(0,0,0,.28), 0 16px 40px -16px rgba(0,0,0,.6);
   --ease: cubic-bezier(.2,.7,.3,1);
 }
+:root[data-theme="light"] {
+  --bg: #f3f4f7;
+  --bg-radial: radial-gradient(1200px 600px at 15% -10%, rgba(58,91,217,.05), transparent 60%),
+               radial-gradient(900px 500px at 100% 0%, rgba(143,109,240,.04), transparent 55%);
+  --panel: #ffffff;
+  --panel-alt: #eef0f3;
+  --panel-elevated: #ffffff;
+  --border: #dbdfe5;
+  --border-soft: #e6e9ed;
+  --text: #191b1f;
+  --text-secondary: #454b54;
+  --muted: #6b7280;
+  --accent: #3a5bd9;
+  --accent-soft: #2f4bb8;
+  --accent-dim: rgba(58,91,217,.10);
+  --shadow-card: 0 1px 2px rgba(20,25,35,.06), 0 8px 20px -14px rgba(20,25,35,.16);
+  --shadow-card-hover: 0 2px 6px rgba(20,25,35,.08), 0 14px 32px -16px rgba(20,25,35,.20);
+}
+:root[data-theme="light"] code,
+:root[data-theme="light"] .evidence-box,
+:root[data-theme="light"] pre.poc,
+:root[data-theme="light"] ul.file-list {
+  background: #f6f7f9;
+  color: #2a2f37;
+}
+:root[data-theme="light"] pre.poc { color: #1f4d2e; }
+:root[data-theme="light"] .toolbar input[type=search] {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'><circle cx='11' cy='11' r='7'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>");
+}
+body, .finding, .dash-panel, .summary-card, details.module-section, .risk-banner {
+  transition: background-color .2s var(--ease), border-color .2s var(--ease), color .2s var(--ease);
+}
+.theme-toggle {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: var(--panel-alt); border: 1px solid var(--border); color: var(--text-secondary);
+  font-size: 11.5px; font-weight: 700; letter-spacing: 0.3px;
+  padding: 8px 14px; border-radius: var(--radius-sm); cursor: pointer; font-family: inherit;
+  transition: border-color .15s var(--ease), color .15s var(--ease);
+}
+.theme-toggle:hover { border-color: var(--accent); color: var(--accent-soft); }
+.theme-toggle .icon { font-size: 13px; line-height: 0; }
 * { box-sizing: border-box; }
 html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 body {
@@ -549,8 +590,26 @@ function fallbackCopy(text, cb) {
   document.body.removeChild(ta);
   cb();
 }
+function applyTheme(mode) {
+  document.documentElement.setAttribute('data-theme', mode);
+  const icon = document.getElementById('themeToggleIcon');
+  const label = document.getElementById('themeToggleLabel');
+  if (icon && label) {
+    if (mode === 'light') { icon.innerHTML = '&#9789;'; label.textContent = 'Dark Mode'; }
+    else { icon.innerHTML = '&#9728;'; label.textContent = 'Light Mode'; }
+  }
+}
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  const next = current === 'light' ? 'dark' : 'light';
+  applyTheme(next);
+  try { localStorage.setItem('warden-report-theme', next); } catch (e) {}
+}
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('searchBox').addEventListener('input', applyFilters);
+  let saved = 'dark';
+  try { saved = localStorage.getItem('warden-report-theme') || 'dark'; } catch (e) {}
+  applyTheme(saved);
 });
 """
 
@@ -800,7 +859,10 @@ def generate_html_report(result: ScanResult, output_path: str | Path) -> Path:
 <body>
 <div class="wrap">
 <header>
-  <div class="brand">{_BRAND_SVG}<div><div class="eyebrow">Static Security Assessment Report</div><h1>Warden</h1></div></div>
+  <div class="brand" style="justify-content:space-between;">
+    <div style="display:flex;align-items:center;gap:14px;">{_BRAND_SVG}<div><div class="eyebrow">Static Security Assessment Report</div><h1>Warden</h1></div></div>
+    <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" type="button"><span class="icon" id="themeToggleIcon">&#9728;</span><span id="themeToggleLabel">Light Mode</span></button>
+  </div>
   <div class="subtitle">Static security analysis for thick-client applications</div>
   <div class="meta-grid">
     <div class="meta-item"><div class="meta-label">Target</div><div class="meta-value mono">{_esc(meta.target_path)}</div></div>

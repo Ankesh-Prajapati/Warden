@@ -107,3 +107,33 @@ known_system_dlls:
   - msvcr90.dll
   - mfc140.dll
   - mfc140u.dll
+
+  # ---------------------------------------------------------------
+  # Legacy VB6 / classic MFC / ActiveX runtime redistributables.
+  # These ship with the official Visual Basic 6 Runtime and VC++ 6
+  # redistributable packages and install into System32 — extremely
+  # common in older line-of-business Windows desktop apps (VB6/VFP/
+  # classic ActiveX/OCX-based UIs), and not a plantable phantom DLL
+  # when genuinely present system-wide via the official redistributable.
+  # ---------------------------------------------------------------
+  - msvbvm60.dll
+  - msvbvm50.dll
+  - mfc42.dll
+  - mfc42u.dll
+  - mfc40.dll
+  - mfc40u.dll
+  - msvcrt40.dll
+  - oleaut32.dll
+  - olepro32.dll
+  - asycfilt.dll
+  - stdole2.tlb
+  - comcat.dll
+  - ctl3d32.dll
+  - vb6stkit.dll
+  - msado15.dll
+  - msjet40.dll
+  - msjter40.dll
+  - msjint40.dll
+  - dao350.dll
+  - dao360.dll
+

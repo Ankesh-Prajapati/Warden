@@ -126,3 +126,13 @@ class WardenSettings:
 
     def load_geometry(self):
         return self._qs.value("window/geometry", None)
+
+    # -- appearance ---------------------------------------------------
+    @property
+    def theme_mode(self) -> str:
+        value = self._qs.value("appearance/theme", "dark", str)
+        return value if value in ("dark", "light") else "dark"
+
+    @theme_mode.setter
+    def theme_mode(self, value: str) -> None:
+        self._qs.setValue("appearance/theme", value if value in ("dark", "light") else "dark")

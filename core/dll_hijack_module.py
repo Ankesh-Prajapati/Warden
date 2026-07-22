@@ -24,8 +24,9 @@ from pathlib import Path
 import yaml
 
 from core.fs_walk import check_permissive_permissions, find_pe_files
+from core.dll_poc_generator import build_hijack_poc_text
 from core.models import Finding, Severity
-from core.pe_utils import PEInfo, is_pe_file, parse_pe
+from core.pe_utils import PEInfo, get_security_mitigations, is_pe_file, parse_pe
 
 # APIs that, if present, indicate the binary takes some control over DLL
 # search order/resolution rather than relying on default (unsafe) behavior.
@@ -356,26 +357,7 @@ def _phantom_dll_findings(
                 ),
                 tags=["dll-hijack", "phantom-dll"],
                 confidence="Medium",  # our known-system-DLL list isn't exhaustive
-                poc=(
-                    f"1. Confirm the import is genuinely unresolved on a real target "
-                    f"install (not just missing from this static analysis machine):\n"
-                    f"     Copy the application to a clean Windows VM matching the "
-                    f"target's OS build, then run:\n"
-                    f"     Process Monitor (procmon.exe) filtered to Process Name = "
-                    f"\"{Path(pe_path).name}\", Operation = \"Load Image\", and look for "
-                    f"a \"NAME NOT FOUND\" result for '{dll_name}'.\n\n"
-                    f"2. If confirmed missing, build a minimal proof-of-concept DLL "
-                    f"named exactly '{dll_name}' exporting a DllMain that writes a "
-                    f"marker to a log file (e.g. using a template PoC DLL project or "
-                    f"`x86_64-w64-mingw32-gcc -shared -o {dll_name} poc.c`).\n\n"
-                    f"3. Place the PoC DLL in a directory searched before the location "
-                    f"where the real DLL (if any) would legitimately reside — typically "
-                    f"the application's own directory or the process's current working "
-                    f"directory, per the default DLL search order.\n\n"
-                    f"4. Launch '{Path(pe_path).name}' and confirm the PoC DLL's "
-                    f"DllMain executed (check the marker log file) to demonstrate code "
-                    f"execution in this process's context via the missing dependency."
-                ),
+                poc=build_hijack_poc_text(dll_name, pe_info.imported_functions.get(dll_name, []), get_security_mitigations(pe_path).is_64bit),
             )
         )
 

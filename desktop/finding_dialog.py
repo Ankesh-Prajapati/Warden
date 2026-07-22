@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.models import Finding
+from desktop import theme
 from desktop.theme import SEVERITY_COLORS
 
 
@@ -25,8 +26,8 @@ def _section(title: str, body: str) -> QWidget:
 
     heading = QLabel(title)
     heading.setStyleSheet(
-        "font-weight: 700; font-size: 11px; letter-spacing: 0.4px; "
-        "text-transform: uppercase; color: #8b8f96;"
+        f"font-weight: 700; font-size: 11px; letter-spacing: 0.4px; "
+        f"text-transform: uppercase; color: {theme.get_palette()['MUTED']};"
     )
     layout.addWidget(heading)
 
@@ -66,7 +67,7 @@ class FindingDialog(QDialog):
             f"Module: {f['module']}  |  Rule: {f['rule_id']}  |  Confidence: {f.get('confidence', 'Medium')}"
         )
         meta.setTextFormat(Qt.TextFormat.PlainText)
-        meta.setStyleSheet("color: #8b8f96; font-size: 11.5px;")
+        meta.setStyleSheet(f"color: {theme.get_palette()['MUTED']}; font-size: 11.5px;")
         outer.addWidget(meta)
 
         locations = f.get("locations") or [
@@ -74,7 +75,7 @@ class FindingDialog(QDialog):
         ]
         count_label = QLabel(f"{len(locations)} affected location{'s' if len(locations) != 1 else ''}")
         count_label.setTextFormat(Qt.TextFormat.PlainText)
-        count_label.setStyleSheet("font-family: Consolas, monospace; font-size: 11.5px; color: #93aaf3;")
+        count_label.setStyleSheet(f"font-family: Consolas, monospace; font-size: 11.5px; color: {theme.get_palette()['ACCENT_SOFT']};")
         count_label.setWordWrap(True)
         outer.addWidget(count_label)
 

@@ -13,6 +13,7 @@ Emits a flat list of core.models.Finding objects, which the orchestrator
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -148,6 +149,91 @@ def _looks_like_sequential_charset(evidence: str) -> bool:
     if not substantial_runs:
         return False
     return all(_is_sequential_run(r) for r in runs)
+
+
+def _looks_like_partitioned_charset(evidence: str) -> bool:
+    """
+    Catches charset tables built from a small number of contiguous
+    alphabet slices concatenated together (e.g. "CDEFGHIJSTUVWXYZ" is
+    C-J plus S-Z) — a common pattern for filename-safe/ambiguity-
+    avoiding encoding alphabets. Like a fully sequential run, this is a
+    fixed, highly predictable constant, not a real secret, even though
+    Shannon entropy alone can't tell the difference (every character
+    still appears at most once).
+
+    Deliberately conservative: requires very few breaks (<=2, i.e. at
+    most 3 contiguous alphabet slices) AND each slice to be a
+    substantial run (>=4 letters) — a genuine random secret's unique
+    letters are scattered with many small gaps, not organized into a
+    couple of long contiguous chunks. An earlier, looser version of
+    this check incorrectly matched real secrets (e.g. AWS/Stripe key
+    patterns), so err on the side of under-matching here.
+    """
+    for case_letters in (
+        "".join(c for c in evidence if c.isupper()),
+        "".join(c for c in evidence if c.islower()),
+    ):
+        if len(case_letters) < 12:
+            continue
+        unique_sorted = sorted(set(case_letters))
+        if len(unique_sorted) < 12:
+            continue
+        runs = [[unique_sorted[0]]]
+        for prev, cur in zip(unique_sorted, unique_sorted[1:]):
+            if ord(cur) - ord(prev) == 1:
+                runs[-1].append(cur)
+            else:
+                runs.append([cur])
+        if len(runs) <= 3 and all(len(r) >= 4 for r in runs):
+            return True
+    return False
+
+
+_IDENTIFIER_PREFIX_MARKERS = (
+    "fn_", "sb_", "proc_", "sp_", "usp_", "fun_", "func_", "cmd_", "btn_", "frm_", "cls_",
+)
+
+
+def _looks_like_code_identifier(evidence: str) -> bool:
+    """
+    Catches VB6/SQL-style function, stored-procedure, and form/control
+    identifiers (e.g. "Fn_Activate_AutoMailer_ProgramId_As_MailSubject",
+    "SB_UPDATE_FCRCPTBL_FiscalReceiptNumber") — underscore-delimited,
+    word-like tokens that score as high-entropy from case/underscore
+    mixing, but are source-code identifiers pulled from a binary's
+    string table, not secrets.
+    """
+    low = evidence.lower()
+    if not any(low.startswith(p) for p in _IDENTIFIER_PREFIX_MARKERS):
+        return False
+    segments = [s for s in evidence.split("_") if s]
+    return len(segments) >= 3 and all(s.isalpha() or s.isdigit() for s in segments)
+
+
+_IMAGE_MAGIC_BYTES = (
+    b"\xff\xd8\xff",       # JPEG
+    b"\x89PNG\r\n\x1a\n",  # PNG
+    b"GIF87a", b"GIF89a",  # GIF
+    b"BM",                 # BMP
+)
+
+
+def _looks_like_embedded_image_blob(evidence: str) -> bool:
+    """
+    Catches base64-encoded image data (icons/toolbar bitmaps embedded as
+    resource strings in legacy VB6/MFC forms) — decodes cleanly as valid
+    base64 and the decoded bytes start with a known image file magic
+    number. High Shannon entropy is expected for compressed image data;
+    it isn't a secret.
+    """
+    candidate = evidence.strip()
+    if len(candidate) < 40 or not re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", candidate):
+        return False
+    try:
+        decoded = base64.b64decode(candidate[:64] + "==", validate=False)
+    except (binascii.Error, ValueError):
+        return False
+    return decoded.startswith(_IMAGE_MAGIC_BYTES)
 
 
 _CERT_AUTHORITY_MARKERS = (
@@ -402,6 +488,44 @@ def _build_permission_poc(file_path: str) -> str:
     )
 
 
+_SQL_KEYWORD_NOISE = {
+    "select", "database", "connectionstring", "where", "from", "insert", "update",
+    "delete", "exec", "execute", "procedure", "initial", "table", "into", "values",
+    "declare", "begin", "end", "driver", "server", "provider",
+}
+
+
+def _looks_like_sql_noise(evidence_raw: str) -> bool:
+    """
+    Rejects password/PWD= matches whose captured "value" is actually an
+    adjacent SQL keyword or ALL_CAPS_IDENTIFIER rather than a real
+    credential (e.g. "PWD= SELECT", "PWD=      SM.MAJOR_VERSION"). This
+    happens because a password-assignment regex has no way to know
+    where a real assignment's value ends versus unrelated text that
+    happens to sit right after it in string-extracted, SQL-heavy legacy
+    code — it can only bound the value syntactically, not semantically.
+    """
+    value_match = re.search(r"[:=]\s*[\"']?([^\"']+?)[\"']?\s*$", evidence_raw)
+    value = (value_match.group(1) if value_match else evidence_raw).strip()
+    if not value:
+        return True
+    low = value.lower().rstrip(";")
+    if low in _SQL_KEYWORD_NOISE:
+        return True
+    # A qualified SQL identifier like "SM.MAJOR_VERSION" or a bracketed
+    # table/column reference like "fortuneNextAssembly.mdb]...": real
+    # passwords essentially never contain a literal "." followed by an
+    # ALL_CAPS or bracket-qualified continuation.
+    if "." in value and re.search(r"\.[A-Z_\]]{3,}", value):
+        return True
+    # Bare ALL_CAPS_WITH_UNDERSCORES identifier and nothing else — a
+    # column/constant name, not a credential (real passwords mix case
+    # or include non-alpha characters far more often than not).
+    if re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", value):
+        return True
+    return False
+
+
 def _scan_text_content(
     content: str,
     file_path: str,
@@ -427,6 +551,17 @@ def _scan_text_content(
                 # an IPv4 address. If the text right before this match is a
                 # version="/Version:/FileVersion= style attribute, this is
                 # a declared version number, not a network indicator.
+                continue
+            if rule.id in ("generic-password-assignment", "odbc-pwd") and _looks_like_sql_noise(evidence_raw):
+                # A password/PWD= regex has no way to know where a real
+                # assignment's value ends versus adjacent unrelated text —
+                # in string-extracted binary/SQL-heavy code, "PWD=" is
+                # frequently immediately followed (in the raw extracted
+                # byte stream, not in any real source construct) by the
+                # next unrelated SQL keyword/identifier ("PWD= SELECT",
+                # "PWD=      SM.MAJOR_VERSION"). Reject values that look
+                # like SQL keywords or ALL_CAPS_IDENTIFIERS rather than an
+                # actual credential.
                 continue
             line_no = content.count("\n", 0, match.start()) + 1
             findings.append(
@@ -470,6 +605,12 @@ def _scan_text_content(
             if any(candidate in f.evidence or f.evidence in candidate for f in findings):
                 continue
             if _looks_like_sequential_charset(candidate):
+                continue
+            if _looks_like_partitioned_charset(candidate):
+                continue
+            if _looks_like_code_identifier(candidate):
+                continue
+            if _looks_like_embedded_image_blob(candidate):
                 continue
             if _looks_like_certificate_authority_string(candidate):
                 continue

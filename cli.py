@@ -26,12 +26,12 @@ console = Console()
 
 @click.group()
 def cli():
-    """Warden — static security analysis for Windows thick-client apps."""
+    """Warden - static security analysis for thick-client apps."""
     pass
 
 
 @cli.command()
-@click.argument("target", type=click.Path(exists=True, file_okay=False))
+@click.argument("target", type=click.Path(exists=True, file_okay=True, dir_okay=True))
 @click.option("--output", "-o", default="secretsentry_report.html", help="HTML report output path.")
 @click.option("--json", "json_output", default=None, help="Optional path to also write raw JSON findings.")
 @click.option("--rules-dir", default=None, type=click.Path(exists=True, file_okay=False), help="Override rule pack directory.")
@@ -53,10 +53,18 @@ def cli():
 def scan(target, output, json_output, rules_dir, no_entropy, no_pe_strings, modules, services_file, no_osslsigncode,
          vt_api_key, vt_include_clean, vt_max_lookups, vt_upload_unknown, incremental, cache_file,
          yara_rules_dir, plugins_dir, max_workers, hide_inventory):
-    """Run a static security scan against TARGET directory."""
+    """Run a static security scan against TARGET (a directory, or a single file for a quick one-off scan)."""
     selected_modules = list(modules) if modules else ["secrets"]
 
-    console.print(f"[bold cyan]Warden[/bold cyan] scanning [white]{target}[/white]")
+    target_path = Path(target)
+    if target_path.is_file():
+        single_file = target_path
+        scan_target_dir = target_path.parent
+        console.print(f"[bold cyan]Warden[/bold cyan] scanning single file [white]{target}[/white]")
+    else:
+        single_file = None
+        scan_target_dir = target_path
+        console.print(f"[bold cyan]Warden[/bold cyan] scanning [white]{target}[/white]")
     console.print(f"Modules: {', '.join(selected_modules)}")
 
     if "reputation" in selected_modules:
@@ -88,7 +96,7 @@ def scan(target, output, json_output, rules_dir, no_entropy, no_pe_strings, modu
 
     try:
         result = run_scan(
-            target_dir=target,
+            target_dir=scan_target_dir,
             modules=selected_modules,
             rules_dir=rules_dir,
             enable_entropy=not no_entropy,
@@ -105,6 +113,7 @@ def scan(target, output, json_output, rules_dir, no_entropy, no_pe_strings, modu
             plugins_dir=plugins_dir,
             max_workers=max_workers,
             include_inventory=not hide_inventory,
+            single_file=single_file,
             progress_callback=progress,
             error_callback=on_error,
         )

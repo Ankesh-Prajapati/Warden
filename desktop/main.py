@@ -89,6 +89,14 @@ def main() -> int:
     _claim_windows_taskbar_identity()
 
     app = QApplication(sys.argv)
+    # Force the Fusion style: without it, QMenuBar/QMenu on several
+    # platforms partially fall back to native OS chrome for their default
+    # (non-hovered) state and only honor our QSS colors for :selected/hover
+    # — which is exactly why menu text was invisible until hovered. Fusion
+    # is Qt's own cross-platform style that fully respects QSS everywhere,
+    # so switching to it makes menu appearance consistent and correct on
+    # every platform instead of being an OS-native-rendering guessing game.
+    app.setStyle("Fusion")
     app.setApplicationName("Warden")
     app.setOrganizationName("Ankesh Prajapati")
     if ICON_PATH.exists():
@@ -98,8 +106,12 @@ def main() -> int:
 
     _install_global_exception_hook(app)
 
-    from desktop.theme import QSS
-    app.setStyleSheet(QSS)
+    from desktop.theme import build_qpalette, set_theme
+    from desktop.settings import WardenSettings
+
+    saved_mode = WardenSettings().theme_mode
+    app.setPalette(build_qpalette(saved_mode))
+    app.setStyleSheet(set_theme(saved_mode))
 
     # Imported after QApplication exists — some Qt widget setup wants an
     # active application instance in place first.

@@ -647,11 +647,31 @@ def _manifest_findings(pe_path: Path, pe_info: PEInfo) -> list[Finding]:
     if not xml:
         return []
     lower = xml.lower()
-    hits = []
-    for key in ("requestededexecutionlevel", "requestedexecutionlevel", "autoelevate", "uiaccess"):
-        if key in lower:
-            hits.append(key)
-    if not hits:
+
+    # Capture the actual declared value, not just "this keyword appeared"
+    # — requestedExecutionLevel="asInvoker" is benign, "requireAdministrator"
+    # or "highestAvailable" is a real privilege-escalation-relevant signal,
+    # and a report that only says "requestedexecutionlevel" was matched
+    # gives an analyst no way to tell which without opening the binary.
+    #
+    # Real manifest structure (not a flat attr="value" list on the root):
+    #   <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+    # i.e. "level" and "uiAccess" are attributes *on* the
+    # requestedExecutionLevel element, while autoElevate is a separate
+    # element's *text content*, not an attribute anywhere:
+    #   <autoElevate>true</autoElevate>
+    attr_values: dict[str, str] = {}
+    level_m = re.search(r"<requestedExecutionLevel\b[^>]*\blevel\s*=\s*[\"']([^\"']*)[\"']", xml, re.IGNORECASE)
+    if level_m:
+        attr_values["requestedExecutionLevel"] = level_m.group(1)
+    ui_m = re.search(r"<requestedExecutionLevel\b[^>]*\buiAccess\s*=\s*[\"']([^\"']*)[\"']", xml, re.IGNORECASE)
+    if ui_m:
+        attr_values["uiAccess"] = ui_m.group(1)
+    auto_m = re.search(r"<autoElevate\b[^>]*>\s*(true|false)\s*</autoElevate>", xml, re.IGNORECASE)
+    if auto_m:
+        attr_values["autoElevate"] = auto_m.group(1)
+
+    if not attr_values:
         return [Finding(
             module="re_exposure",
             rule_id="embedded-manifest-present",
@@ -665,19 +685,37 @@ def _manifest_findings(pe_path: Path, pe_info: PEInfo) -> list[Finding]:
             confidence="Medium",
             extra={"manifest": xml},
         )]
-    severity = Severity.HIGH if "requireadministrator" in lower or "autoelevate" in lower else Severity.MEDIUM
+
+    exec_level = attr_values.get("requestedExecutionLevel", "").lower()
+    auto_elevate = attr_values.get("autoElevate", "").lower() == "true"
+    ui_access = attr_values.get("uiAccess", "").lower() == "true"
+    is_elevated = exec_level in ("requireadministrator", "highestavailable") or auto_elevate
+
+    severity = Severity.HIGH if (auto_elevate or exec_level == "requireadministrator") else (
+        Severity.MEDIUM if (exec_level == "highestavailable" or ui_access) else Severity.INFO
+    )
+    evidence = ", ".join(f'{k}="{v}"' for k, v in attr_values.items())
     return [Finding(
         module="re_exposure",
         rule_id="manifest-privilege-settings",
         title="Manifest privilege settings detected",
         severity=severity,
         file_path=str(pe_path),
-        evidence=", ".join(hits),
-        description="The embedded manifest references requestedExecutionLevel, autoElevate, uiAccess, or related privilege-affecting settings.",
-        remediation="Use the lowest required requestedExecutionLevel, avoid autoElevate unless explicitly needed and properly signed/trusted, and ensure uiAccess is only enabled for approved assistive UI scenarios.",
+        evidence=evidence,
+        description=(
+            "The embedded manifest declares the following privilege-affecting "
+            f"settings: {evidence}. " + (
+                "This requests elevated privileges (administrator/highest-available "
+                "or auto-elevation), which is a meaningfully higher-risk configuration "
+                "than the default asInvoker level."
+                if is_elevated else
+                "These values do not request elevated execution by default."
+            )
+        ),
+        remediation="Use the lowest required requestedExecutionLevel (asInvoker unless elevation is genuinely required), avoid autoElevate unless explicitly needed and properly signed/trusted, and ensure uiAccess is only enabled for approved assistive UI scenarios.",
         tags=["binary", "manifest", "privilege"],
         confidence="High",
-        extra={"manifest": xml},
+        extra={"manifest": xml, "attributes": attr_values},
     )]
 
 

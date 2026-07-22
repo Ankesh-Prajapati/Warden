@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, QTimer
-from PySide6.QtGui import QAction, QColor, QIcon
+from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QPalette
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -43,7 +43,8 @@ from report.html_export import generate_html_report
 from desktop.finding_dialog import FindingDialog
 from desktop.scan_worker import ScanController, VTTestWorker
 from desktop.settings import WardenSettings
-from desktop.theme import SEVERITY_COLORS
+from desktop import theme
+from desktop.theme import SEVERITY_COLORS, set_theme
 
 logger = get_logger("desktop.main_window")
 
@@ -58,7 +59,7 @@ def _application_root() -> Path:
 REPORTS_DIR = _application_root() / "reports"
 
 COMMON_MODULES = [
-    ("secrets", "Secrets & Config Exposure"),
+    ("secrets", "Secrets && Config Exposure"),
     ("dll_hijack", "DLL Hijacking Detection"),
     ("signature", "Signature / Integrity Check"),
     ("re_exposure", "RE / Anti-Tamper Exposure"),
@@ -113,15 +114,149 @@ class MainWindow(QMainWindow):
     # UI construction
     # ------------------------------------------------------------------
     def _build_menu(self) -> None:
+        self.menuBar().setNativeMenuBar(False)
+        self.menuBar().setObjectName("mainMenuBar")
+        self.menuBar().setAutoFillBackground(True)
+        self._apply_menu_theme(self.settings.theme_mode)
+
         file_menu = self.menuBar().addMenu("&File")
+        self._apply_popup_menu_theme(file_menu, self.settings.theme_mode)
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
+        theme_menu = self.menuBar().addMenu("&Theme")
+        self._apply_popup_menu_theme(theme_menu, self.settings.theme_mode)
+        theme_group = QActionGroup(self)
+        theme_group.setExclusive(True)
+        self._dark_theme_action = QAction("Dark", self, checkable=True)
+        self._light_theme_action = QAction("Light", self, checkable=True)
+        theme_group.addAction(self._dark_theme_action)
+        theme_group.addAction(self._light_theme_action)
+        self._dark_theme_action.triggered.connect(lambda: self._set_theme("dark"))
+        self._light_theme_action.triggered.connect(lambda: self._set_theme("light"))
+        theme_menu.addAction(self._dark_theme_action)
+        theme_menu.addAction(self._light_theme_action)
+        current_mode = self.settings.theme_mode
+        self._dark_theme_action.setChecked(current_mode == "dark")
+        self._light_theme_action.setChecked(current_mode == "light")
+
         help_menu = self.menuBar().addMenu("&Help")
+        self._apply_popup_menu_theme(help_menu, self.settings.theme_mode)
         about_action = QAction("About Warden", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
+
+    def _menu_popup_qss(self, mode: str) -> str:
+        palette = theme.get_palette(mode)
+        return f"""
+            QMenu {{
+                background-color: {palette["PANEL"]};
+                color: {palette["TEXT"]};
+                border: 1px solid {palette["BORDER"]};
+                padding: 4px;
+            }}
+            QMenu::item {{
+                background: transparent;
+                color: {palette["TEXT"]};
+                padding: 7px 28px 7px 18px;
+                border-radius: 4px;
+            }}
+            QMenu::item:selected {{
+                background-color: {palette["ACCENT_DIM"]};
+                color: {palette["TEXT"]};
+            }}
+            QMenu::item:checked {{
+                color: {palette["ACCENT"]};
+                font-weight: 700;
+            }}
+            QMenu::item:disabled {{
+                color: {palette["MUTED"]};
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background: {palette["BORDER"]};
+                margin: 4px 8px;
+            }}
+        """
+
+    def _apply_popup_menu_theme(self, menu, mode: str) -> None:
+        palette = theme.get_palette(mode)
+        qpalette = menu.palette()
+        qpalette.setColor(QPalette.ColorRole.Window, QColor(palette["PANEL"]))
+        qpalette.setColor(QPalette.ColorRole.WindowText, QColor(palette["TEXT"]))
+        qpalette.setColor(QPalette.ColorRole.Base, QColor(palette["PANEL"]))
+        qpalette.setColor(QPalette.ColorRole.Text, QColor(palette["TEXT"]))
+        qpalette.setColor(QPalette.ColorRole.ButtonText, QColor(palette["TEXT"]))
+        qpalette.setColor(QPalette.ColorRole.Highlight, QColor(palette["ACCENT_DIM"]))
+        qpalette.setColor(QPalette.ColorRole.HighlightedText, QColor(palette["TEXT"]))
+        menu.setPalette(qpalette)
+        menu.setStyleSheet(self._menu_popup_qss(mode))
+
+    def _apply_menu_theme(self, mode: str) -> None:
+        """Apply explicit menu colors; Windows can ignore inherited QSS here."""
+        palette = theme.get_palette(mode)
+        menu_bar = self.menuBar()
+
+        qpalette = menu_bar.palette()
+        qpalette.setColor(QPalette.ColorRole.Window, QColor(palette["PANEL"]))
+        qpalette.setColor(QPalette.ColorRole.WindowText, QColor(palette["TEXT"]))
+        qpalette.setColor(QPalette.ColorRole.Button, QColor(palette["PANEL"]))
+        qpalette.setColor(QPalette.ColorRole.ButtonText, QColor(palette["TEXT"]))
+        qpalette.setColor(QPalette.ColorRole.Text, QColor(palette["TEXT"]))
+        menu_bar.setPalette(qpalette)
+
+        menu_bar.setStyleSheet(
+            f"""
+            QMenuBar#mainMenuBar {{
+                background-color: {palette["PANEL"]};
+                color: {palette["TEXT"]};
+                border-bottom: 1px solid {palette["BORDER"]};
+                padding: 2px 8px;
+            }}
+            QMenuBar#mainMenuBar::item {{
+                background: transparent;
+                color: {palette["TEXT"]};
+                padding: 6px 14px;
+                margin: 0 2px;
+                border-radius: 4px;
+            }}
+            QMenuBar#mainMenuBar::item:selected,
+            QMenuBar#mainMenuBar::item:pressed {{
+                background-color: {palette["ACCENT_DIM"]};
+                color: {palette["TEXT"]};
+            }}
+            QMenuBar#mainMenuBar::item:disabled {{
+                color: {palette["MUTED"]};
+            }}
+            """
+        )
+        for action in menu_bar.actions():
+            popup = action.menu()
+            if popup is not None:
+                self._apply_popup_menu_theme(popup, mode)
+        menu_bar.update()
+
+    def _set_theme(self, mode: str) -> None:
+        """Switch the app's light/dark theme at runtime and persist the
+        choice so it's remembered next launch."""
+        from PySide6.QtWidgets import QApplication
+
+        mode = mode if mode in {"dark", "light"} else "dark"
+        qss = set_theme(mode)
+        app = QApplication.instance()
+        if app is not None:
+            app.setPalette(theme.build_qpalette(mode))
+            app.setStyleSheet(qss)
+        self._apply_menu_theme(mode)
+        self.settings.theme_mode = mode
+        self._dark_theme_action.setChecked(mode == "dark")
+        self._light_theme_action.setChecked(mode == "light")
+        # Severity colors in theme.SEVERITY_COLORS were updated in place by
+        # set_theme(); re-populate the table so already-rendered rows pick
+        # up the new palette immediately instead of only on the next scan.
+        if getattr(self, "_last_findings", None) is not None:
+            self._populate_table(self._last_findings)
 
     def _show_about(self) -> None:
         QMessageBox.about(
@@ -319,9 +454,11 @@ class MainWindow(QMainWindow):
         self.opt_vt_include_clean = QCheckBox("Also report binaries VirusTotal has seen and NOT flagged")
         vt_layout.addWidget(self.opt_vt_include_clean)
 
-        vt_danger = QGroupBox()
-        vt_danger.setStyleSheet("QGroupBox { border: 1px solid #4a2c2b; background-color: #1a1414; }")
+        vt_danger = QWidget()
+        vt_danger.setObjectName("dangerBox")
         vt_danger_layout = QVBoxLayout(vt_danger)
+        vt_danger_layout.setContentsMargins(14, 12, 14, 12)
+        vt_danger_layout.setSpacing(8)
         self.opt_vt_upload = QCheckBox("Upload unknown binaries to VirusTotal for fresh analysis")
         vt_danger_layout.addWidget(self.opt_vt_upload)
         vt_warning = QLabel(
@@ -329,7 +466,7 @@ class MainWindow(QMainWindow):
             "if uploading this specific target to VirusTotal is acceptable under your engagement's "
             "confidentiality terms."
         )
-        vt_warning.setStyleSheet("color: #d0b352; font-size: 11px;")
+        vt_warning.setObjectName("dangerWarningText")
         vt_warning.setWordWrap(True)
         vt_danger_layout.addWidget(vt_warning)
         self.opt_vt_upload_confirm = QCheckBox("I confirm uploading this target's binaries to VirusTotal is authorized")
@@ -630,7 +767,7 @@ class MainWindow(QMainWindow):
         key = self.vt_api_key_input.text().strip() or self.settings.vt_api_key
         if not key:
             self.vt_test_status.setText("No API key to test — paste one first.")
-            self.vt_test_status.setStyleSheet("color: #d0b352;")
+            self.vt_test_status.setStyleSheet(f"color: {theme.get_palette()['AMBER']};")
             return
 
         self.vt_test_btn.setEnabled(False)
@@ -648,7 +785,8 @@ class MainWindow(QMainWindow):
         self.vt_test_btn.setEnabled(True)
         self.vt_test_btn.setText("Test Key")
         self.vt_test_status.setText(("✓ " if ok else "✗ ") + message)
-        self.vt_test_status.setStyleSheet(f"color: {'#7fb069' if ok else '#e0645c'};")
+        palette = theme.get_palette()
+        self.vt_test_status.setStyleSheet(f"color: {palette['GREEN'] if ok else palette['RED']};")
         if self._vt_test_thread:
             self._vt_test_thread.quit()
             self._vt_test_thread.wait(3000)
@@ -686,8 +824,9 @@ class MainWindow(QMainWindow):
         self._append_log(message, level)
 
     def _append_log(self, message: str, level: str) -> None:
-        colors = {"dim": "#8b8f96", "warn": "#d0b352", "error": "#e0645c", "ok": "#7fb069"}
-        color = colors.get(level, "#e9eaec")
+        palette = theme.get_palette()
+        colors = {"dim": palette["MUTED"], "warn": palette["AMBER"], "error": palette["RED"], "ok": palette["GREEN"]}
+        color = colors.get(level, palette["TEXT"])
         ts = datetime.now().strftime("%H:%M:%S")
         # appendHtml() renders its argument as rich text, and log messages
         # routinely embed attacker-controlled data (filenames, paths, raw
@@ -696,7 +835,7 @@ class MainWindow(QMainWindow):
         # `<img src=...>.exe` can't inject markup into the log pane.
         safe_message = html.escape(message)
         self.log_console.appendHtml(
-            f'<span style="color:#5a5d64">{ts}</span> '
+            f'<span style="color:{palette["MUTED"]}">{ts}</span> '
             f'<span style="color:{color}">{safe_message}</span>'
         )
 
@@ -760,6 +899,7 @@ class MainWindow(QMainWindow):
     # Findings table
     # ------------------------------------------------------------------
     def _populate_table(self, findings: list[Finding]) -> None:
+        self._last_findings = findings
         grouped = group_findings(findings)
         self.table.setRowCount(0)
         self.table.setRowCount(len(grouped))
