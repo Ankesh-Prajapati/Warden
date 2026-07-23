@@ -1,6 +1,6 @@
-<div align="center">
+<img src="assets/readme.PNG" alt="Warden Logo" width="100%"/>
 
-<div align="center"> <img src="assets/readme.PNG" alt="Warden Logo" width="100%"/>
+<div align="center">
 
 # Warden
 
@@ -17,7 +17,7 @@
 
 ---
 
-## Overview
+<h2 id="overview" align="center">Overview</h2>
 
 Warden is a static security analysis tool for thick-client desktop
 applications. It scans extracted application folders or individual binaries
@@ -29,7 +29,7 @@ packages/binaries, macOS app bundles, secrets and configuration exposure,
 reverse-engineering exposure, binary hardening, code-signing integrity, and
 optional VirusTotal reputation checks.
 
-## Table of Contents
+<h2 id="table-of-contents" align="center">Table of Contents</h2>
 
 - [What Warden Does](#what-warden-does)
 - [Key Features](#key-features)
@@ -52,14 +52,14 @@ optional VirusTotal reputation checks.
 
 ---
 
-## What Warden Does
+<h2 id="what-warden-does" align="center">What Warden Does</h2>
 
 Warden is static-only. It reads files, parses metadata, extracts indicators,
 and analyzes configuration. It does **not** run the target application,
 exploit anything, hook processes, bypass protections, or perform dynamic
 malware analysis.
 
-### Core Capabilities
+<h3 id="core-capabilities" align="center">Core Capabilities</h3>
 
 | Module | Platform | Coverage |
 |---|---|---|
@@ -72,7 +72,7 @@ malware analysis.
 | macOS Thick-Client Assessment | macOS | Mach-O metadata, signing, notarization, hardened runtime, entitlements, URL schemes |
 | VirusTotal Reputation Check | All | Optional SHA-256 hash lookup; upload is separate explicit opt-in |
 
-## Key Features
+<h2 id="key-features" align="center">Key Features</h2>
 
 - Native PySide6 desktop app with light and dark themes.
 - CLI using the same scanner engine as the desktop app.
@@ -87,7 +87,7 @@ malware analysis.
 - Application-local desktop reports in `reports/`, suitable for installer
   packaging.
 
-## Installation
+<h2 id="installation" align="center">Installation</h2>
 
 Requires **Python 3.10+**.
 
@@ -111,7 +111,7 @@ $ source venv/bin/activate
 $ pip install -r requirements.txt
 ```
 
-### Optional Tools
+<h3 id="optional-tools" align="center">Optional Tools</h3>
 
 | Tool | Purpose |
 |---|---|
@@ -120,7 +120,7 @@ $ pip install -r requirements.txt
 | `otool`, `codesign`, `spctl` | Deeper Mach-O signing/notarization analysis on macOS |
 | `yara-python` | Listed in `requirements.txt`; custom YARA scans are skipped gracefully if unavailable |
 
-## Quick Start
+<h2 id="quick-start" align="center">Quick Start</h2>
 
 **Desktop app:**
 
@@ -153,7 +153,7 @@ $ python cli.py scan ./target --module linux --hide-inventory
 $ python cli.py scan ./target --module macos --hide-inventory
 ```
 
-## Desktop App
+<h2 id="desktop-app" align="center">Desktop App</h2>
 
 Run:
 
@@ -182,13 +182,13 @@ The desktop app supports:
 > high-security enterprise use, move this to OS credential storage before
 > distribution.
 
-## CLI
+<h2 id="cli" align="center">CLI</h2>
 
 ```bash
 $ python cli.py scan TARGET [OPTIONS]
 ```
 
-### Important Options
+<h3 id="important-options" align="center">Important Options</h3>
 
 | Option | Description |
 |---|---|
@@ -211,7 +211,7 @@ $ python cli.py scan TARGET [OPTIONS]
 | `--max-workers N` | Worker count for supported scans |
 | `--hide-inventory` | Hide Linux/macOS inventory/pass findings |
 
-## Secrets And Configuration Intelligence
+<h2 id="secrets-and-configuration-intelligence" align="center">Secrets And Configuration Intelligence</h2>
 
 The secrets module scans text/config files and embedded binary strings.
 
@@ -227,7 +227,7 @@ It detects:
 - Structured config formats: JSON, XML, YAML, INI, TOML, SQLite, and plist.
 - Authentication, database, logging, TLS, and debug settings.
 
-## Reverse Engineering And Binary Analysis
+<h2 id="reverse-engineering-and-binary-analysis" align="center">Reverse Engineering And Binary Analysis</h2>
 
 Windows reverse-engineering checks include:
 
@@ -245,7 +245,7 @@ Windows reverse-engineering checks include:
   `autoElevate`, `uiAccess`, and related privilege settings.
 - Imported-DLL dependency graph data included in report context.
 
-## Signature Analysis
+<h2 id="signature-analysis" align="center">Signature Analysis</h2>
 
 The signature module checks Windows PE Authenticode metadata:
 
@@ -262,7 +262,7 @@ The signature module checks Windows PE Authenticode metadata:
 > Full Windows trust validation, revocation, and timestamp policy decisions
 > are best confirmed on Windows with `signtool verify /pa`.
 
-## Linux Assessment
+<h2 id="linux-assessment" align="center">Linux Assessment</h2>
 
 The Linux module statically assesses an application folder, package
 extraction, or AppImage-style tree.
@@ -282,7 +282,7 @@ It checks:
 Inventory/pass findings can be hidden with the desktop toggle or
 `--hide-inventory`.
 
-## macOS Assessment
+<h2 id="macos-assessment" align="center">macOS Assessment</h2>
 
 The macOS module statically assesses extracted `.app` bundles and related
 application folders.
@@ -304,7 +304,7 @@ It checks:
 > Some macOS checks require macOS command-line tools and are reported as
 > best-effort when run from Windows or Linux.
 
-## VirusTotal Reputation
+<h2 id="virustotal-reputation" align="center">VirusTotal Reputation</h2>
 
 VirusTotal checks are **opt-in**.
 
@@ -316,7 +316,7 @@ desktop upload option is explicitly enabled.
 > third-party service. This is especially important for proprietary client
 > software.
 
-## Custom Rules And Plugins
+<h2 id="custom-rules-and-plugins" align="center">Custom Rules And Plugins</h2>
 
 Secret rules are YAML files under `rules/`.
 
@@ -342,7 +342,7 @@ def scan_file(path):
 > Python plugins execute code from the selected folder. Treat plugin folders
 > as trusted code only.
 
-## Reports
+<h2 id="reports" align="center">Reports</h2>
 
 Reports are self-contained HTML files.
 
@@ -366,7 +366,7 @@ The report includes:
 - Grouped/deduplicated findings.
 - Detailed evidence and reproduction steps.
 
-## Project Structure
+<h2 id="project-structure" align="center">Project Structure</h2>
 
 ```text
 Warden/
@@ -410,7 +410,7 @@ Warden/
 Both interfaces call `core.scanner.run_scan()`. Module output is normalized
 into `core.models.Finding` and rendered by `report.html_export`.
 
-## Known Limitations
+<h2 id="known-limitations" align="center">Known Limitations</h2>
 
 - Warden is static-only. It does not prove exploitability.
 - Entropy findings are heuristic and can produce false positives.
@@ -423,7 +423,7 @@ into `core.models.Finding` and rendered by `report.html_export`.
 - SQLite parsing extracts settings and obvious data but does not decrypt
   protected application databases.
 
-## Release Hygiene
+<h2 id="release-hygiene" align="center">Release Hygiene</h2>
 
 Before packaging or pushing:
 
@@ -442,7 +442,7 @@ Keep generated files out of source control:
 - local virtual environments
 - generated reports and installer outputs
 
-## Legal And Ethical Use
+<h2 id="legal-and-ethical-use" align="center">Legal And Ethical Use</h2>
 
 Use Warden only against applications you own or have explicit written
 authorization to assess. Do not use it against software or systems where you
@@ -450,8 +450,4 @@ do not have permission.
 
 ---
 
-<div align="center">
-
 Built and maintained by **[Ankesh Prajapati](https://github.com/Ankesh-Prajapati)**
-
-</div>
