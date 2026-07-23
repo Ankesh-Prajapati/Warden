@@ -139,6 +139,10 @@ QWidget {{
     background-color: transparent;
 }}
 
+QDialog, QMessageBox {{
+    background-color: {BG};
+}}
+
 QFrame#card, QGroupBox {{
     background-color: {PANEL};
     border: 1px solid {BORDER};
