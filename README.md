@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/readme.png" alt="Warden Logo" width="180"/>
+<img src="assets/readme.PNG" alt="Warden Logo" width="180"/>
 
 # Warden
 
@@ -94,21 +94,21 @@ Requires **Python 3.10+**.
 **Windows:**
 
 ```powershell
-git clone <repo-url> Warden
-cd Warden
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
+PS> git clone <repo-url> Warden
+PS> cd Warden
+PS> python -m venv venv
+PS> venv\Scripts\activate
+PS> pip install -r requirements.txt
 ```
 
 **Linux / macOS:**
 
 ```bash
-git clone <repo-url> Warden
-cd Warden
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+$ git clone <repo-url> Warden
+$ cd Warden
+$ python3 -m venv venv
+$ source venv/bin/activate
+$ pip install -r requirements.txt
 ```
 
 ### Optional Tools
@@ -125,32 +125,32 @@ pip install -r requirements.txt
 **Desktop app:**
 
 ```powershell
-python desktop\main.py
+PS> python desktop\main.py
 ```
 
 **CLI, default secrets scan:**
 
 ```bash
-python cli.py scan ./target --output report.html
+$ python cli.py scan ./target --output report.html
 ```
 
 **CLI, common Windows modules:**
 
 ```bash
-python cli.py scan ./target \
-  --module secrets \
-  --module dll_hijack \
-  --module signature \
-  --module re_exposure \
-  --output report.html \
-  --json findings.json
+$ python cli.py scan ./target \
+    --module secrets \
+    --module dll_hijack \
+    --module signature \
+    --module re_exposure \
+    --output report.html \
+    --json findings.json
 ```
 
 **CLI with Linux/macOS inventory hidden:**
 
 ```bash
-python cli.py scan ./target --module linux --hide-inventory
-python cli.py scan ./target --module macos --hide-inventory
+$ python cli.py scan ./target --module linux --hide-inventory
+$ python cli.py scan ./target --module macos --hide-inventory
 ```
 
 ## Desktop App
@@ -158,7 +158,7 @@ python cli.py scan ./target --module macos --hide-inventory
 Run:
 
 ```powershell
-python desktop\main.py
+PS> python desktop\main.py
 ```
 
 The desktop app supports:
@@ -185,7 +185,7 @@ The desktop app supports:
 ## CLI
 
 ```bash
-python cli.py scan TARGET [OPTIONS]
+$ python cli.py scan TARGET [OPTIONS]
 ```
 
 ### Important Options
@@ -323,13 +323,13 @@ Secret rules are YAML files under `rules/`.
 YARA rules can be stored under `rules/yara` or supplied with:
 
 ```bash
-python cli.py scan ./target --module re_exposure --yara-rules-dir ./my-yara-rules
+$ python cli.py scan ./target --module re_exposure --yara-rules-dir ./my-yara-rules
 ```
 
 Python detector plugins can be supplied with:
 
 ```bash
-python cli.py scan ./target --plugins-dir ./plugins
+$ python cli.py scan ./target --plugins-dir ./plugins
 ```
 
 Each plugin file may expose:
@@ -428,8 +428,8 @@ into `core.models.Finding` and rendered by `report.html_export`.
 Before packaging or pushing:
 
 ```powershell
-python -m compileall .
-python cli.py --help
+PS> python -m compileall .
+PS> python cli.py --help
 ```
 
 Keep generated files out of source control:
