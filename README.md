@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/readme.PNG" alt="Warden Logo" width="180"/>
+<div align="center"> <img src="assets/readme.PNG" alt="Warden Logo" width="100%"/>
 
 # Warden
 
