@@ -1,25 +1,65 @@
+<div align="center">
+
+<img src="assets/readme.png" alt="Warden Logo" width="180"/>
+
 # Warden
+
+**Static Security Analysis for Thick-Client Desktop Applications**
+
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-Proprietary-lightgrey.svg)](#)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-informational.svg)](#)
+[![Status](https://img.shields.io/badge/status-Active-success.svg)](#)
+
+*Author: [Ankesh Prajapati](https://github.com/Ankesh-Prajapati)*
+
+</div>
+
+---
+
+## Overview
 
 Warden is a static security analysis tool for thick-client desktop
 applications. It scans extracted application folders or individual binaries
-without executing the target, and produces a deduplicated professional HTML
-report plus optional JSON output.
+**without executing the target**, and produces a deduplicated, professional
+HTML report plus optional JSON output.
 
 Supported assessment areas include Windows PE applications, Linux desktop
 packages/binaries, macOS app bundles, secrets and configuration exposure,
 reverse-engineering exposure, binary hardening, code-signing integrity, and
 optional VirusTotal reputation checks.
 
-Author: Ankesh Prajapati
+## Table of Contents
+
+- [What Warden Does](#what-warden-does)
+- [Key Features](#key-features)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Desktop App](#desktop-app)
+- [CLI](#cli)
+- [Secrets And Configuration Intelligence](#secrets-and-configuration-intelligence)
+- [Reverse Engineering And Binary Analysis](#reverse-engineering-and-binary-analysis)
+- [Signature Analysis](#signature-analysis)
+- [Linux Assessment](#linux-assessment)
+- [macOS Assessment](#macos-assessment)
+- [VirusTotal Reputation](#virustotal-reputation)
+- [Custom Rules And Plugins](#custom-rules-and-plugins)
+- [Reports](#reports)
+- [Project Structure](#project-structure)
+- [Known Limitations](#known-limitations)
+- [Release Hygiene](#release-hygiene)
+- [Legal And Ethical Use](#legal-and-ethical-use)
+
+---
 
 ## What Warden Does
 
 Warden is static-only. It reads files, parses metadata, extracts indicators,
-and analyzes configuration. It does not run the target application, exploit
-anything, hook processes, bypass protections, or perform dynamic malware
-analysis.
+and analyzes configuration. It does **not** run the target application,
+exploit anything, hook processes, bypass protections, or perform dynamic
+malware analysis.
 
-Core capabilities:
+### Core Capabilities
 
 | Module | Platform | Coverage |
 |---|---|---|
@@ -49,7 +89,9 @@ Core capabilities:
 
 ## Installation
 
-Requires Python 3.10+.
+Requires **Python 3.10+**.
+
+**Windows:**
 
 ```powershell
 git clone <repo-url> Warden
@@ -59,7 +101,7 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Linux/macOS:
+**Linux / macOS:**
 
 ```bash
 git clone <repo-url> Warden
@@ -69,30 +111,30 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Optional tools:
+### Optional Tools
 
-- `osslsigncode` for deeper Authenticode digest verification.
-- `readelf` for deeper ELF hardening/library analysis on Linux.
-- `otool`, `codesign`, and `spctl` for deeper Mach-O signing/notarization
-  analysis on macOS.
-- `yara-python` is listed in `requirements.txt`; custom YARA scans are skipped
-  gracefully if it is unavailable.
+| Tool | Purpose |
+|---|---|
+| `osslsigncode` | Deeper Authenticode digest verification |
+| `readelf` | Deeper ELF hardening/library analysis on Linux |
+| `otool`, `codesign`, `spctl` | Deeper Mach-O signing/notarization analysis on macOS |
+| `yara-python` | Listed in `requirements.txt`; custom YARA scans are skipped gracefully if unavailable |
 
 ## Quick Start
 
-Desktop app:
+**Desktop app:**
 
 ```powershell
 python desktop\main.py
 ```
 
-CLI, default secrets scan:
+**CLI, default secrets scan:**
 
 ```bash
 python cli.py scan ./target --output report.html
 ```
 
-CLI, common Windows modules:
+**CLI, common Windows modules:**
 
 ```bash
 python cli.py scan ./target \
@@ -104,7 +146,7 @@ python cli.py scan ./target \
   --json findings.json
 ```
 
-CLI with Linux/macOS inventory hidden:
+**CLI with Linux/macOS inventory hidden:**
 
 ```bash
 python cli.py scan ./target --module linux --hide-inventory
@@ -135,9 +177,10 @@ The desktop app supports:
 - Double-click finding details with evidence, context, remediation, and PoC.
 - HTML and JSON reports written to the application-local `reports/` folder.
 
-Desktop settings are persisted through Qt settings storage. The VirusTotal API
-key is stored the same way as other desktop settings; for high-security
-enterprise use, move this to OS credential storage before distribution.
+> **Note:** Desktop settings are persisted through Qt settings storage. The
+> VirusTotal API key is stored the same way as other desktop settings; for
+> high-security enterprise use, move this to OS credential storage before
+> distribution.
 
 ## CLI
 
@@ -145,7 +188,7 @@ enterprise use, move this to OS credential storage before distribution.
 python cli.py scan TARGET [OPTIONS]
 ```
 
-Important options:
+### Important Options
 
 | Option | Description |
 |---|---|
@@ -216,13 +259,13 @@ The signature module checks Windows PE Authenticode metadata:
 - Unknown publisher indicators.
 - Optional `osslsigncode verify` digest mismatch detection.
 
-Full Windows trust validation, revocation, and timestamp policy decisions are
-best confirmed on Windows with `signtool verify /pa`.
+> Full Windows trust validation, revocation, and timestamp policy decisions
+> are best confirmed on Windows with `signtool verify /pa`.
 
 ## Linux Assessment
 
-The Linux module statically assesses an application folder, package extraction,
-or AppImage-style tree.
+The Linux module statically assesses an application folder, package
+extraction, or AppImage-style tree.
 
 It checks:
 
@@ -258,19 +301,20 @@ It checks:
   certificates, update metadata, internal/dev endpoints, writable paths, and
   SBOM/library inventory.
 
-Some macOS checks require macOS command-line tools and are reported as
-best-effort when run from Windows or Linux.
+> Some macOS checks require macOS command-line tools and are reported as
+> best-effort when run from Windows or Linux.
 
 ## VirusTotal Reputation
 
-VirusTotal checks are opt-in.
+VirusTotal checks are **opt-in**.
 
 By default Warden sends only SHA-256 hashes to VirusTotal. The binary itself
 does not leave the machine unless `--vt-upload-unknown` or the matching
 desktop upload option is explicitly enabled.
 
-Use upload only when you have permission to submit target binaries to a third
-party service. This is especially important for proprietary client software.
+> Use upload only when you have permission to submit target binaries to a
+> third-party service. This is especially important for proprietary client
+> software.
 
 ## Custom Rules And Plugins
 
@@ -295,14 +339,14 @@ def scan_file(path):
     return []
 ```
 
-Python plugins execute code from the selected folder. Treat plugin folders as
-trusted code only.
+> Python plugins execute code from the selected folder. Treat plugin folders
+> as trusted code only.
 
 ## Reports
 
 Reports are self-contained HTML files.
 
-Desktop reports:
+**Desktop reports:**
 
 ```text
 reports/
@@ -403,3 +447,11 @@ Keep generated files out of source control:
 Use Warden only against applications you own or have explicit written
 authorization to assess. Do not use it against software or systems where you
 do not have permission.
+
+---
+
+<div align="center">
+
+Built and maintained by **[Ankesh Prajapati](https://github.com/Ankesh-Prajapati)**
+
+</div>
