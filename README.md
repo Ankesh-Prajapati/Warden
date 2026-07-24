@@ -64,7 +64,7 @@ malware analysis.
 | Module | Platform | Coverage |
 |---|---|---|
 | Secrets and Config Exposure | All | Secrets, JWTs, database connection strings, auth/config settings, entropy candidates |
-| DLL Hijacking Detection | Windows | Phantom imports, DLL search-order exposure, writable paths, unquoted service paths |
+| DLL Hijacking Detection | Windows | Phantom imports, DLL search-order exposure, writable paths, unquoted service paths, generated proof-of-concept test case per phantom import |
 | Signature / Integrity Check | Windows | Authenticode presence, certificate details, chain summary, timestamp, publisher consistency |
 | RE / Anti-Tamper Exposure | Windows | ASLR/DEP/CFG/SafeSEH, packers, PDB leaks, strings, YARA, crypto/framework indicators |
 | Binary Analysis | Windows | Embedded manifests, privilege settings, imported-DLL dependency graph |
@@ -188,6 +188,10 @@ The desktop app supports:
 $ python cli.py scan TARGET [OPTIONS]
 ```
 
+`TARGET` accepts either a directory (scans every file inside it) or a
+single file (e.g. `python cli.py scan app.exe`) for a quick one-off scan
+of a specific binary — matching the desktop app's "Select EXE" mode.
+
 <h3 id="important-options" align="center">Important Options</h3>
 
 | Option | Description |
@@ -244,6 +248,11 @@ Windows reverse-engineering checks include:
 - Embedded manifest analysis including `requestedExecutionLevel`,
   `autoElevate`, `uiAccess`, and related privilege settings.
 - Imported-DLL dependency graph data included in report context.
+- Phantom DLL imports include a generated, ready-to-compile proof-of-concept:
+  a proxy DLL source stubbing the exact functions the target binary
+  actually imports (from the real import table, not guessed), a build
+  script for MinGW/MSVC, and step-by-step instructions to confirm the
+  hijack is real (a benign `DllMain` marker, not an exploit payload).
 
 <h2 id="signature-analysis" align="center">Signature Analysis</h2>
 
