@@ -17,6 +17,13 @@
 
 ---
 
+## 🖼️ Application Screenshots
+
+The following screenshots showcase the user interface, core functionality, and overall user experience.
+<img src="assets/screenshot.png" alt="Warden Logo" width="100%"/>
+
+<img src="assets/screenshot (1).png" alt="Warden Logo" width="100%"/>
+
 <h2 id="overview" align="center">Overview</h2>
 
 Warden is a static security analysis tool for thick-client desktop
