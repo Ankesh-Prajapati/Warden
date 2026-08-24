@@ -1,0 +1,452 @@
+{
+  "metadata": {
+    "target_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+    "started_at": "2026-08-24T11:11:42.566588+00:00",
+    "finished_at": "2026-08-24T11:11:48.086638+00:00",
+    "files_scanned": 4,
+    "tool_version": "0.1.0"
+  },
+  "summary": {
+    "Critical": 0,
+    "High": 1,
+    "Medium": 1,
+    "Low": 1,
+    "Info": 10
+  },
+  "findings": [
+    {
+      "module": "signature",
+      "rule_id": "unsigned-binary",
+      "title": "Unsigned executable/library",
+      "severity": "High",
+      "file_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+      "evidence": "No Authenticode signature (security directory) present",
+      "description": "This binary carries no Authenticode signature, so its origin and integrity cannot be cryptographically verified. Unsigned binaries are easier to tamper with or substitute without detection, and are often flagged by endpoint security and SmartScreen.",
+      "remediation": "Sign all shipped executables and libraries with a valid code-signing certificate from a trusted CA, and verify signatures as part of the build/release pipeline.",
+      "poc": "1. Confirm no signature is present directly:\n     Windows (PowerShell):\n       Get-AuthenticodeSignature -FilePath \"C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe\" | Format-List\n       (Status will show 'NotSigned')\n     Linux:\n       osslsigncode verify \"C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe\"\n       (Output will show 'No signature found')\n\n2. Impact demonstration: because there is no signature, Windows SmartScreen/AppLocker/WDAC publisher-based rules cannot distinguish this binary from a tampered or malicious replacement. If this file sits in a writable location (cross-reference any writable-directory finding for the same path), an attacker's replacement binary would be indistinguishable from the original at the OS trust level.\n\n3. For the client report: capture the Get-AuthenticodeSignature output as evidence alongside a screenshot of the file's Properties > Digital Signatures tab in Windows Explorer (which will show no 'Digital Signatures' tab at all for an unsigned file).",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "signature",
+        "integrity"
+      ],
+      "confidence": "High",
+      "extra": {},
+      "fingerprint": "76ba6e5d58316451"
+    },
+    {
+      "module": "secrets",
+      "rule_id": "high-entropy-string",
+      "title": "High-entropy string (possible unrecognized secret)",
+      "severity": "Medium",
+      "file_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+      "evidence": "PyMarshal_ReadObjectFromString",
+      "description": "A string with unusually high randomness (Shannon entropy) was found, which often indicates an API key, token, or password that doesn't match a known vendor pattern. (Extracted from embedded strings inside a PE binary.)",
+      "remediation": "Manually review this value. If it is a credential or token, remove it from the file, rotate it, and load it via a secrets manager or environment variable instead.",
+      "poc": "1. Extract printable strings from the binary directly to confirm independently:\n   Windows (Sysinternals strings.exe):\n     strings64.exe -n 6 \"C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe\" | findstr /i \"PyMarsha\"\n   Linux:\n     strings -n 6 \"C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe\" | grep -i 'PyMarsha'\n\n2. Open Network VAPT Reporting Tool.exe in a PE viewer (CFF Explorer, Detect It Easy, or IDA/Ghidra) and locate the string in the resource/data section to confirm it is not dead code or a leftover debug string.\n\n3. If confirmed live, treat this the same as a config-file secret: rotate the credential and remove it from the compiled binary \u2014 hardcoded strings in compiled code are trivially recoverable with basic reverse-engineering tools regardless of packing.\n\n4. Evidence: PyMarshal_ReadObjectFromString",
+      "line_number": 453,
+      "offset": null,
+      "tags": [
+        "generic",
+        "embedded-in-binary",
+        "entropy"
+      ],
+      "confidence": "Low",
+      "extra": {
+        "context": "   451 | PyImport_ExecCodeModule\n   452 | PyImport_ImportModule\n>> 453 | PyMarshal_ReadObjectFromString\n   454 | PyMem_RawFree\n   455 | PyModule_GetDict"
+      },
+      "fingerprint": "985548cc02512b22"
+    },
+    {
+      "module": "secrets",
+      "rule_id": "high-entropy-string",
+      "title": "High-entropy string (possible unrecognized secret)",
+      "severity": "Medium",
+      "file_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+      "evidence": "PyObject_CallFunctionObjArgs",
+      "description": "A string with unusually high randomness (Shannon entropy) was found, which often indicates an API key, token, or password that doesn't match a known vendor pattern. (Extracted from embedded strings inside a PE binary.)",
+      "remediation": "Manually review this value. If it is a credential or token, remove it from the file, rotate it, and load it via a secrets manager or environment variable instead.",
+      "poc": "1. Extract printable strings from the binary directly to confirm independently:\n   Windows (Sysinternals strings.exe):\n     strings64.exe -n 6 \"C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe\" | findstr /i \"PyObject\"\n   Linux:\n     strings -n 6 \"C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe\" | grep -i 'PyObject'\n\n2. Open Network VAPT Reporting Tool.exe in a PE viewer (CFF Explorer, Detect It Easy, or IDA/Ghidra) and locate the string in the resource/data section to confirm it is not dead code or a leftover debug string.\n\n3. If confirmed live, treat this the same as a config-file secret: rotate the credential and remove it from the compiled binary \u2014 hardcoded strings in compiled code are trivially recoverable with basic reverse-engineering tools regardless of packing.\n\n4. Evidence: PyObject_CallFunctionObjArgs",
+      "line_number": 457,
+      "offset": null,
+      "tags": [
+        "generic",
+        "embedded-in-binary",
+        "entropy"
+      ],
+      "confidence": "Low",
+      "extra": {
+        "context": "   455 | PyModule_GetDict\n   456 | PyObject_CallFunction\n>> 457 | PyObject_CallFunctionObjArgs\n   458 | PyObject_GetAttrString\n   459 | PyObject_SetAttrString"
+      },
+      "fingerprint": "2c1aa6dd11b5df91"
+    },
+    {
+      "module": "secrets",
+      "rule_id": "hardcoded-ip",
+      "title": "Hardcoded IPv4 address",
+      "severity": "Low",
+      "file_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+      "evidence": "4.2.3.7",
+      "description": "Pattern matching rule 'hardcoded-ip' (Hardcoded IPv4 address) was found in this file. (Extracted from embedded strings inside a PE binary.)",
+      "remediation": "Remove hardcoded credentials/secrets from source and configuration files. Use a secrets manager (Azure Key Vault, AWS Secrets Manager, HashiCorp Vault) or environment variables injected at runtime, and rotate the exposed credential immediately.",
+      "poc": "1. Extract printable strings from the binary directly to confirm independently:\n   Windows (Sysinternals strings.exe):\n     strings64.exe -n 6 \"C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe\" | findstr /i \"4.2.3.7\"\n   Linux:\n     strings -n 6 \"C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe\" | grep -i '4.2.3.7'\n\n2. Open Network VAPT Reporting Tool.exe in a PE viewer (CFF Explorer, Detect It Easy, or IDA/Ghidra) and locate the string in the resource/data section to confirm it is not dead code or a leftover debug string.\n\n3. If confirmed live, treat this the same as a config-file secret: rotate the credential and remove it from the compiled binary \u2014 hardcoded strings in compiled code are trivially recoverable with basic reverse-engineering tools regardless of packing.\n\n4. Evidence: 4.2.3.7",
+      "line_number": 13872,
+      "offset": null,
+      "tags": [
+        "embedded-in-binary",
+        "infra",
+        "recon"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "context": "   13870 | 1l0l4l1<gx\n   13871 | jL1v3v7\n>> 13872 | 4.2.3.7\n   13873 | 7n0n2n6>o\n   13874 | \"mQnQ~"
+      },
+      "fingerprint": "43d11c112a60e8d5"
+    },
+    {
+      "module": "secrets",
+      "rule_id": "hardcoded-ip",
+      "title": "Hardcoded IPv4 address",
+      "severity": "Low",
+      "file_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+      "evidence": "3.6.1.3",
+      "description": "Pattern matching rule 'hardcoded-ip' (Hardcoded IPv4 address) was found in this file. (Extracted from embedded strings inside a PE binary.)",
+      "remediation": "Remove hardcoded credentials/secrets from source and configuration files. Use a secrets manager (Azure Key Vault, AWS Secrets Manager, HashiCorp Vault) or environment variables injected at runtime, and rotate the exposed credential immediately.",
+      "poc": "1. Extract printable strings from the binary directly to confirm independently:\n   Windows (Sysinternals strings.exe):\n     strings64.exe -n 6 \"C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe\" | findstr /i \"3.6.1.3\"\n   Linux:\n     strings -n 6 \"C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe\" | grep -i '3.6.1.3'\n\n2. Open Network VAPT Reporting Tool.exe in a PE viewer (CFF Explorer, Detect It Easy, or IDA/Ghidra) and locate the string in the resource/data section to confirm it is not dead code or a leftover debug string.\n\n3. If confirmed live, treat this the same as a config-file secret: rotate the credential and remove it from the compiled binary \u2014 hardcoded strings in compiled code are trivially recoverable with basic reverse-engineering tools regardless of packing.\n\n4. Evidence: 3.6.1.3",
+      "line_number": 13909,
+      "offset": null,
+      "tags": [
+        "embedded-in-binary",
+        "infra",
+        "recon"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "context": "   13907 | _?V?N?Q\n   13908 | 7t2t68\n>> 13909 | 3.6.1.3\n   13910 | 5>4>2>6>5>3\n   13911 | f|i|cl4"
+      },
+      "fingerprint": "7f3c4b338471f0c6"
+    },
+    {
+      "module": "secrets",
+      "rule_id": "hardcoded-ip",
+      "title": "Hardcoded IPv4 address",
+      "severity": "Low",
+      "file_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+      "evidence": "5.2.6.5",
+      "description": "Pattern matching rule 'hardcoded-ip' (Hardcoded IPv4 address) was found in this file. (Extracted from embedded strings inside a PE binary.)",
+      "remediation": "Remove hardcoded credentials/secrets from source and configuration files. Use a secrets manager (Azure Key Vault, AWS Secrets Manager, HashiCorp Vault) or environment variables injected at runtime, and rotate the exposed credential immediately.",
+      "poc": "1. Extract printable strings from the binary directly to confirm independently:\n   Windows (Sysinternals strings.exe):\n     strings64.exe -n 6 \"C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe\" | findstr /i \"5.2.6.5\"\n   Linux:\n     strings -n 6 \"C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe\" | grep -i '5.2.6.5'\n\n2. Open Network VAPT Reporting Tool.exe in a PE viewer (CFF Explorer, Detect It Easy, or IDA/Ghidra) and locate the string in the resource/data section to confirm it is not dead code or a leftover debug string.\n\n3. If confirmed live, treat this the same as a config-file secret: rotate the credential and remove it from the compiled binary \u2014 hardcoded strings in compiled code are trivially recoverable with basic reverse-engineering tools regardless of packing.\n\n4. Evidence: 5.2.6.5",
+      "line_number": 16604,
+      "offset": null,
+      "tags": [
+        "embedded-in-binary",
+        "infra",
+        "recon"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "context": "   16602 | .C7O7_\n   16603 | uOu/totou\n>> 16604 | 5.2.6.5\n   16605 | c.F%hQs\n   16606 | 2EY~YA"
+      },
+      "fingerprint": "978728e5b86374fd"
+    },
+    {
+      "module": "secrets",
+      "rule_id": "acl-check-limited",
+      "title": "ACL inspection limited on this platform",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+      "evidence": "Running on Windows without ACL inspection enabled; only basic attributes checked. Use icacls for authoritative ACL review.",
+      "description": "Static ACL review was limited; verify manually.",
+      "remediation": "Run `icacls <file>` on the target Windows host to confirm effective permissions.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "permissions",
+        "acl",
+        "gap"
+      ],
+      "confidence": "Low",
+      "extra": {},
+      "fingerprint": "c7512acff2d2003d"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "extracted-urls",
+      "title": "Extracted url indicators",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+      "evidence": "http://schemas.microsoft.com/SMI/2016/WindowsSettings",
+      "description": "Static string extraction found indicators useful for reverse engineering and attack-surface review.",
+      "remediation": "Review extracted indicators for unintended endpoints, internal paths, IPC channels, registry persistence, or environment-specific leakage.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "re-exposure",
+        "strings",
+        "url"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "url": [
+          "http://schemas.microsoft.com/SMI/2016/WindowsSettings"
+        ]
+      },
+      "fingerprint": "b8d87a70d1f385c7"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "extracted-ips",
+      "title": "Extracted ip indicators",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+      "evidence": "3.6.1.3, 4.2.3.7, 5.2.6.5",
+      "description": "Static string extraction found indicators useful for reverse engineering and attack-surface review.",
+      "remediation": "Review extracted indicators for unintended endpoints, internal paths, IPC channels, registry persistence, or environment-specific leakage.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "re-exposure",
+        "strings",
+        "ip"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "ip": [
+          "3.6.1.3",
+          "4.2.3.7",
+          "5.2.6.5"
+        ]
+      },
+      "fingerprint": "065b8cd38c828f8e"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "extracted-domains",
+      "title": "Extracted domain indicators",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+      "evidence": "JxM.ai, btx.SH, e2a.Ca, ngc.Us, schemas.microsoft.com, uBbtrAH.cz",
+      "description": "Static string extraction found indicators useful for reverse engineering and attack-surface review.",
+      "remediation": "Review extracted indicators for unintended endpoints, internal paths, IPC channels, registry persistence, or environment-specific leakage.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "re-exposure",
+        "strings",
+        "domain"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "domain": [
+          "JxM.ai",
+          "btx.SH",
+          "e2a.Ca",
+          "ngc.Us",
+          "schemas.microsoft.com",
+          "uBbtrAH.cz"
+        ]
+      },
+      "fingerprint": "821249ce488dd427"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "extracted-guids",
+      "title": "Extracted guid indicators",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+      "evidence": "{1f676c76-80e1-4239-95bb-83d0f6d0da78}, {35138b9a-5d96-4fbd-8e2d-a2440225f93a}, {4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}, {8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}, {e2011457-1546-43c5-a5fe-008deee3d3f0}",
+      "description": "Static string extraction found indicators useful for reverse engineering and attack-surface review.",
+      "remediation": "Review extracted indicators for unintended endpoints, internal paths, IPC channels, registry persistence, or environment-specific leakage.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "re-exposure",
+        "strings",
+        "guid"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "guid": [
+          "{1f676c76-80e1-4239-95bb-83d0f6d0da78}",
+          "{35138b9a-5d96-4fbd-8e2d-a2440225f93a}",
+          "{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}",
+          "{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}",
+          "{e2011457-1546-43c5-a5fe-008deee3d3f0}"
+        ]
+      },
+      "fingerprint": "3f91902b5b2ad222"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "interesting-strings",
+      "title": "Interesting strings extracted from binary",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+      "evidence": "OpenProcessToken, GetTokenInformation, IsDebuggerPresent,       <assemblyIdentity type=\"win32\" name=\"Microsoft.Windows.Common-Controls\" version=\"6.0.0.0\" processorArchitecture=\"*\" publicKeyToken=\"6595b64144ccf1df\" language=\"*\"/>, html5lib.tokenizer), openpyxl.formula.tokenizer), packaging._tokenizer), packaging.licenses), packaging.licenses._spdx), secrets)",
+      "description": "Strings with security-relevant keywords were found in the binary.",
+      "remediation": "Review these strings to confirm they do not leak credentials, debug behavior, or internal authorization logic.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "re-exposure",
+        "strings"
+      ],
+      "confidence": "Low",
+      "extra": {
+        "strings": [
+          "OpenProcessToken",
+          "GetTokenInformation",
+          "IsDebuggerPresent",
+          "      <assemblyIdentity type=\"win32\" name=\"Microsoft.Windows.Common-Controls\" version=\"6.0.0.0\" processorArchitecture=\"*\" publicKeyToken=\"6595b64144ccf1df\" language=\"*\"/>",
+          "html5lib.tokenizer)",
+          "openpyxl.formula.tokenizer)",
+          "packaging._tokenizer)",
+          "packaging.licenses)",
+          "packaging.licenses._spdx)",
+          "secrets)",
+          "setuptools._distutils.debug)",
+          "'setuptools._vendor.packaging._tokenizer)",
+          "token)",
+          "tokenize)",
+          "#wheel.vendored.packaging._tokenizer)",
+          "yaml.tokens)",
+          "b_tk_data\\license.terms",
+          "bimportlib_metadata-8.5.0.dist-info\\LICENSE",
+          "bwheel-0.45.1.dist-info\\LICENSE.txt"
+        ]
+      },
+      "fingerprint": "e0a54d59c389c89e"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "crypto-usage-detected",
+      "title": "Cryptographic library or algorithm usage detected",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+      "evidence": "AES, RSA, RC4, MD5, bcrypt",
+      "description": "Static imports/strings indicate cryptographic functionality such as AES, RSA, RC4, MD5, SHA1, bcrypt, or PBKDF2.",
+      "remediation": "Review crypto usage for modern algorithms, safe modes, key management, salting, and deprecation of MD5/SHA1/RC4.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "re-exposure",
+        "crypto"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "crypto": [
+          "AES",
+          "RSA",
+          "RC4",
+          "MD5",
+          "bcrypt"
+        ]
+      },
+      "fingerprint": "e144f78765b05df2"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "compiler-framework-detected",
+      "title": "Compiler/framework indicators detected",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+      "evidence": ".NET, Java",
+      "description": "Static imports/strings indicate the likely compiler, runtime, or framework family.",
+      "remediation": "Use the detected framework to choose appropriate review tooling such as ILSpy for .NET, Go/ReSym tooling, Java decompilers, or Electron ASAR inspection.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "re-exposure",
+        "framework"
+      ],
+      "confidence": "Medium",
+      "extra": {
+        "frameworks": [
+          ".NET",
+          "Java"
+        ]
+      },
+      "fingerprint": "cef14c5a88f9e409"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "manifest-privilege-settings",
+      "title": "Manifest privilege settings detected",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+      "evidence": "requestedExecutionLevel=\"asInvoker\", uiAccess=\"false\"",
+      "description": "The embedded manifest declares the following privilege-affecting settings: requestedExecutionLevel=\"asInvoker\", uiAccess=\"false\". These values do not request elevated execution by default.",
+      "remediation": "Use the lowest required requestedExecutionLevel (asInvoker unless elevation is genuinely required), avoid autoElevate unless explicitly needed and properly signed/trusted, and ensure uiAccess is only enabled for approved assistive UI scenarios.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "binary",
+        "manifest",
+        "privilege"
+      ],
+      "confidence": "High",
+      "extra": {
+        "manifest": "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">\n  <trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\">\n    <security>\n      <requestedPrivileges>\n        <requestedExecutionLevel level=\"asInvoker\" uiAccess=\"false\"/>\n      </requestedPrivileges>\n    </security>\n  </trustInfo>\n  <compatibility xmlns=\"urn:schemas-microsoft-com:compatibility.v1\">\n    <application>\n      <supportedOS Id=\"{e2011457-1546-43c5-a5fe-008deee3d3f0}\"/>\n      <supportedOS Id=\"{35138b9a-5d96-4fbd-8e2d-a2440225f93a}\"/>\n      <supportedOS Id=\"{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}\"/>\n      <supportedOS Id=\"{1f676c76-80e1-4239-95bb-83d0f6d0da78}\"/>\n      <supportedOS Id=\"{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}\"/>\n    </application>\n  </compatibility>\n  <application xmlns=\"urn:schemas-microsoft-com:asm.v3\">\n    <windowsSettings>\n      <longPathAware xmlns=\"http://schemas.microsoft.com/SMI/2016/WindowsSettings\">true</longPathAware>\n    </windowsSettings>\n  </application>\n  <dependency>\n    <dependentAssembly>\n      <assemblyIdentity type=\"win32\" name=\"Microsoft.Windows.Common-Controls\" version=\"6.0.0.0\" processorArchitecture=\"*\" publicKeyToken=\"6595b64144ccf1df\" language=\"*\"/>\n    </dependentAssembly>\n  </dependency>\n</assembly>",
+        "attributes": {
+          "requestedExecutionLevel": "asInvoker",
+          "uiAccess": "false"
+        }
+      },
+      "fingerprint": "5aa8386f5f0691d1"
+    },
+    {
+      "module": "re_exposure",
+      "rule_id": "binary-dependency-graph",
+      "title": "Binary dependency graph generated from imports",
+      "severity": "Info",
+      "file_path": "C:\\Users\\ankes\\Downloads\\Network VAPT Reporting Tool.exe",
+      "evidence": "USER32.dll, COMCTL32.dll, KERNEL32.dll, ADVAPI32.dll, GDI32.dll",
+      "description": "Imported DLLs were converted into a dependency graph for attack-surface and DLL search-order review.",
+      "remediation": "Review unexpected dependencies, unsigned third-party DLLs, and any imports that may be loaded from writable directories.",
+      "poc": "",
+      "line_number": null,
+      "offset": null,
+      "tags": [
+        "binary",
+        "dependency-graph",
+        "imports"
+      ],
+      "confidence": "High",
+      "extra": {
+        "edges": [
+          [
+            "Network VAPT Reporting Tool.exe",
+            "USER32.dll"
+          ],
+          [
+            "Network VAPT Reporting Tool.exe",
+            "COMCTL32.dll"
+          ],
+          [
+            "Network VAPT Reporting Tool.exe",
+            "KERNEL32.dll"
+          ],
+          [
+            "Network VAPT Reporting Tool.exe",
+            "ADVAPI32.dll"
+          ],
+          [
+            "Network VAPT Reporting Tool.exe",
+            "GDI32.dll"
+          ]
+        ]
+      },
+      "fingerprint": "1e4790e85e539dc1"
+    }
+  ],
+  "module_errors": []
+}

@@ -7,3 +7,11 @@ PySide6>=6.7
 yara-python>=4.5; platform_python_implementation == "CPython"
 tomli>=2.0; python_version < "3.11"
 # reputation module (VirusTotal) uses only Python stdlib (urllib, hashlib) — no new dependency needed
+
+# Archive/installer extraction (core/archive_extractor.py) needs the
+# system `7z` binary — not a pip package. Install separately:
+#   Debian/Ubuntu: sudo apt-get install p7zip-full
+#   macOS:         brew install sevenzip  (or: brew install p7zip)
+#   Windows:       install 7-Zip from https://www.7-zip.org/ and ensure
+#                  7z.exe is on PATH
+# Extraction is silently skipped if 7z isn't found — never a hard failure.

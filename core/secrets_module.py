@@ -39,6 +39,10 @@ DB_URI_RE = re.compile(
     r"\b(?P<scheme>postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|mssql|sqlserver|jdbc:[a-z0-9]+)://[^\s'\"<>]+",
     re.IGNORECASE,
 )
+# Enhanced cloud credential patterns
+AWS_SESSION_TOKEN_RE = re.compile(r'\b(A3T[A-Z0-9]|ATOA|AGOA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{10,}\b')
+AZURE_APP_TOKEN_RE = re.compile(r'(?i)eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+.*?(?:azure|microsoft)')
+GCP_OAUTH_TOKEN_RE = re.compile(r'\bya29\.[A-Za-z0-9_-]+\b')
 CORRELATION_KEYS = {
     "username": ("user", "username", "uid", "login"),
     "password": ("pass", "password", "pwd"),
@@ -58,7 +62,7 @@ CORRELATION_KEYS = {
 # is the opposite of what a VAPT tool should do.
 PLACEHOLDER_MARKERS = {
     "changeme", "changeit", "example", "your_api_key", "xxxxxxxx",
-    "12345678", "test123", "dummy", "placeholder",
+    "test123", "dummy", "placeholder",
     "insert_key_here", "todo", "yourpassword", "replaceme", "sample",
     "<insert", "<your", "<api", "notarealkey", "notreal", "fakekey",
 }
@@ -284,8 +288,140 @@ def _extract_context(lines: list[str], line_no: int, radius: int = 2, max_line_l
     return "\n".join(out)
 
 
+def _looks_like_test_or_example_content(evidence: str) -> bool:
+    """
+    Detect if evidence is likely from test/example content rather than real credentials.
+    This helps reduce false positives in test files, examples, and documentation.
+    """
+    lowered = evidence.lower()
+    test_indicators = [
+        "test", "example", "sample", "demo", "fake", "dummy", "placeholder",
+        "changeme", "insert", "your_", "not_real", "invalid", "expired",
+        "revoked", "dummy_key", "test_key", "sample_key", "api_key_here",
+        "your_api_key", "yourpassword", "put_key_here", "add_key_here", "enter_key_here",
+        "password_here", "put_password_here", "enter_password_here",
+        "username_here", "put_username_here", "enter_username_here",
+        "host_here", "put_host_here", "enter_host_here",
+        "db_host", "db_password", "db_username", "connection_string_here",
+        "jwt_here", "put_jwt_here", "enter_jwt_here", "token_here",
+        "put_token_here", "enter_token_here", "secret_here", "put_secret_here",
+        "enter_secret_here", "key_here", "put_key_here", "enter_key_here",
+        "todo", "<insert", "<your", "<api", "notreal", "fakekey"
+    ]
+
+    # Check for common test/example patterns
+    for indicator in test_indicators:
+        if indicator in lowered:
+            return True
+
+    # Check for obvious test patterns like "123456", "abcdefg", etc.
+    if re.search(r'^test[\d_]*$', lowered) or re.search(r'^example[\d_]*$', lowered):
+        return True
+
+    # Check for sequential patterns that are common in tests
+    if len(lowered) >= 4 and (
+        lowered == "password" or
+        lowered == "passwort" or  # German
+        lowered == "motdepasse" or  # French
+        lowered == "contraseña" or  # Spanish
+        lowered == "123456" or
+        lowered == "654321" or
+        lowered == "abcdef" or
+        lowered == "qwerty" or
+        lowered == "letmein" or
+        lowered == "monkey" or
+        lowered == "dragon" or
+        lowered == "baseball" or
+        lowered == "iloveyou" or
+        lowered == "trustno1" or
+        lowered == "welcome" or
+        lowered == "admin" or
+        lowered == "root" or
+        lowered == "guest"
+    ):
+        return True
+
+    return False
+
+
+def _validate_jwt_signature(token: str) -> bool:
+    """
+    Attempt to validate JWT signature if possible without external dependencies.
+    This is a basic validation that checks if the token has the correct structure
+    and can be decoded (without verifying the signature).
+    For production use, consider integrating a cryptography library for actual signature validation.
+    """
+    try:
+        parts = token.split('.')
+        if len(parts) != 3:
+            return False
+
+        # Try to decode header and payload
+        import base64
+        import json
+
+        # Add padding if needed
+        header = parts[0]
+        payload = parts[1]
+
+        # Base64 URL-safe decode
+        header += '=' * (4 - len(header) % 4) if len(header) % 4 else ''
+        payload += '=' * (4 - len(payload) % 4) if len(payload) % 4 else ''
+
+        # Decode
+        header_decoded = base64.urlsafe_b64decode(header)
+        payload_decoded = base64.urlsafe_b64decode(payload)
+
+        # Try to parse as JSON
+        json.loads(header_decoded)
+        json.loads(payload_decoded)
+
+        return True
+    except Exception:
+        return False
+
+
+def _detect_enhanced_cloud_credentials(content: str) -> list[dict]:
+    """
+    Detect additional cloud credentials beyond the basic YAML rules.
+    Returns a list of dictionaries with credential information.
+    """
+    findings = []
+
+    # Enhanced AWS session tokens
+    for match in AWS_SESSION_TOKEN_RE.finditer(content):
+        findings.append({
+            'type': 'aws_session_token',
+            'value': match.group(0),
+            'start': match.start(),
+            'end': match.end()
+        })
+
+    # Enhanced Azure app tokens (JWT tokens that mention azure/microsoft)
+    for match in AZURE_APP_TOKEN_RE.finditer(content):
+        findings.append({
+            'type': 'azure_app_token',
+            'value': match.group(0),
+            'start': match.start(),
+            'end': match.end()
+        })
+
+    # Enhanced GCP OAuth tokens
+    for match in GCP_OAUTH_TOKEN_RE.finditer(content):
+        findings.append({
+            'type': 'gcp_oauth_token',
+            'value': match.group(0),
+            'start': match.start(),
+            'end': match.end()
+        })
+
+    return findings
+
+
 def _confidence_for(evidence: str, base: str = "Medium") -> str:
     if _looks_like_placeholder(evidence):
+        return "Low"
+    if _looks_like_test_or_example_content(evidence):
         return "Low"
     score = 1
     value = _isolate_value(evidence)
@@ -316,6 +452,25 @@ def _jwt_findings(content: str, file_path: str, lines: list[str]) -> list[Findin
             continue
         line_no = content.count("\n", 0, match.start()) + 1
         interesting = {k: payload.get(k) for k in ("exp", "iss", "aud", "roles", "role", "scp") if k in payload}
+
+        # Determine confidence based on JWT validation and expiration
+        confidence = "High"
+        if "exp" in payload:
+            try:
+                import time
+                exp_timestamp = payload["exp"]
+                if isinstance(exp_timestamp, (int, float)) and exp_timestamp < time.time():
+                    # Expired token
+                    confidence = "Low"
+                elif not _validate_jwt_signature(token):
+                    # Invalid structure
+                    confidence = "Medium"
+            except Exception:
+                # If we can't parse expiration, keep original confidence logic
+                pass
+        else:
+            confidence = "Medium"
+
         findings.append(Finding(
             module="secrets",
             rule_id="jwt-token",
@@ -328,7 +483,7 @@ def _jwt_findings(content: str, file_path: str, lines: list[str]) -> list[Findin
             poc=_build_text_poc(file_path, line_no, "jwt-token", token),
             line_number=line_no,
             tags=["jwt", "token", "auth"],
-            confidence="High",
+            confidence=confidence,
             extra={"jwt": {"header": header, "payload": payload, "alg": header.get("alg"), **interesting}, "context": _extract_context(lines, line_no)},
         ))
     return findings

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rtk ls *)",
+      "Bash(python *)",
+      "Bash(del *)"
+    ]
+  }
+}

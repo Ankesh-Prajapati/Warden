@@ -126,6 +126,7 @@ $ pip install -r requirements.txt
 | `readelf` | Deeper ELF hardening/library analysis on Linux |
 | `otool`, `codesign`, `spctl` | Deeper Mach-O signing/notarization analysis on macOS |
 | `yara-python` | Listed in `requirements.txt`; custom YARA scans are skipped gracefully if unavailable |
+| `7z` (7-Zip / p7zip-full) | Installer/archive extraction (see below) — extraction is silently skipped if not found, never a hard failure |
 
 <h2 id="quick-start" align="center">Quick Start</h2>
 
@@ -221,8 +222,32 @@ of a specific binary — matching the desktop app's "Select EXE" mode.
 | `--plugins-dir PATH` | Trusted Python detector plugins exposing `scan_file(path)` |
 | `--max-workers N` | Worker count for supported scans |
 | `--hide-inventory` | Hide Linux/macOS inventory/pass findings |
+| `--no-extract-archives` | Skip installer/archive extraction (on by default) |
+| `--archive-max-depth N` | Max nesting depth for archives-within-archives (default 2) |
+| `--archive-max-size-mb N` | Cap on total extracted content per archive (default 500) |
 
-<h2 id="secrets-and-configuration-intelligence" align="center">Secrets And Configuration Intelligence</h2>
+<h2 id="archive-and-installer-extraction" align="center">Archive And Installer Extraction</h2>
+
+On by default. Before scanning, Warden unpacks installer/archive-looking
+files (NSIS, InnoSetup, MSI, self-extracting installers, ZIP/CAB/7z — and
+even a plain PE that happens to carry a nested archive in one of its
+resources) using the system `7z` binary, then scans the extracted
+contents too, recursively up to `--archive-max-depth` levels.
+
+This matters: a real signed installer scanned during development carried
+a Cabinet archive inside a PE resource containing five bundled DLLs (an
+updater, an activation helper, a UI framework) that no other module looks
+inside — none of that would have been scanned without this step. Findings
+from extracted content are tagged `extracted-content` and note the
+originating archive in `extra["extracted_from"]`.
+
+Requires `7z` (7-Zip / p7zip-full) on PATH — silently skipped if not
+found, never a hard failure; the outer file is still scanned exactly as
+before. Bounded by nesting depth, a total-extracted-size cap (zip-bomb
+protection), and a per-archive candidate cap in directory scans, so a
+pathological archive can't blow up scan time unbounded.
+
+
 
 The secrets module scans text/config files and embedded binary strings.
 
