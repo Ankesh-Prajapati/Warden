@@ -7,6 +7,7 @@ built, one at a time.
 """
 from __future__ import annotations
 
+import os
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,8 +16,10 @@ from core.cache_utils import ScanCache
 from core.archive_extractor import ARCHIVE_EXTENSIONS, cleanup as cleanup_extraction, extract_archive_recursive
 from core import dll_hijack_module, linux_module, macos_module, re_exposure_module, reputation_module, secrets_module, signature_module
 from core.fs_walk import iter_all_files
+from core.finding_grouping import group_findings
 from core.logging_config import get_logger
 from core.models import Finding, ScanMetadata, Severity
+from core.path_utils import normalize_diagnostic_paths, normalize_target_path, scan_root
 from core.plugin_system import load_python_detectors, run_python_detectors
 
 logger = get_logger("scanner")
@@ -35,34 +38,80 @@ class ScanResult:
         self.module_errors = module_errors or []
 
     def summary_counts(self) -> dict:
-        """Counts unique vulnerabilities (module+rule+title+severity), not
-        one count per affected file — matches how the HTML report groups
-        findings, so the summary cards and the finding list agree."""
-        counts = {s.value: 0 for s in SEVERITY_ORDER}
-        seen = set()
-        for f in self.findings:
-            key = (f.module, f.rule_id, f.title, f.severity.value)
-            if key in seen:
-                continue
-            seen.add(key)
-            counts[f.severity.value] += 1
-        return counts
+        """Counts for vulnerability reporting.
+
+        Returns a dict with:
+        - 'unique': counts of unique vulnerabilities (module+rule+title+severity), excluding informational inventory
+        - 'instances': counts of all finding instances, excluding informational inventory
+        - 'info_unique': counts of unique informational findings
+        - 'info_instances': counts of all informational finding instances
+
+        This separates finding-instance counts from unique-issue counts and
+        excludes informational inventory from vulnerability headline counts.
+        """
+        groups = group_findings(
+            self.findings,
+            scan_root=str(scan_root(self.metadata.target_path)),
+        )
+        vuln_unique = {s.value: 0 for s in SEVERITY_ORDER if s != Severity.INFO}
+        vuln_instances = {s.value: 0 for s in SEVERITY_ORDER if s != Severity.INFO}
+        info_unique = {s.value: 0 for s in SEVERITY_ORDER if s == Severity.INFO}
+        info_instances = {s.value: 0 for s in SEVERITY_ORDER if s == Severity.INFO}
+
+        for finding in groups:
+            severity = finding["severity"]
+            instances = len(finding["occurrences"])
+            if severity == Severity.INFO.value:
+                info_unique[severity] += 1
+                info_instances[severity] += instances
+            else:
+                vuln_unique[severity] += 1
+                vuln_instances[severity] += instances
+
+        return {
+            'unique': vuln_unique,
+            'instances': vuln_instances,
+            'info_unique': info_unique,
+            'info_instances': info_instances
+        }
 
     def sorted_findings(self) -> list[Finding]:
         return sorted(self.findings, key=lambda f: SEVERITY_ORDER.index(f.severity))
 
     def to_dict(self) -> dict:
+        root = str(scan_root(self.metadata.target_path))
+        grouped_findings = group_findings(
+            self.sorted_findings(),
+            scan_root=root,
+        )
+        finding_instances = sum(
+            len(finding["occurrences"]) for finding in grouped_findings
+        )
         return {
             "metadata": {
-                "target_path": self.metadata.target_path,
+                "target_path": normalize_target_path(self.metadata.target_path),
                 "started_at": self.metadata.started_at,
                 "finished_at": self.metadata.finished_at,
                 "files_scanned": self.metadata.files_scanned,
+                "input_files_scanned": self.metadata.input_files_scanned,
+                "extracted_files_scanned": self.metadata.extracted_files_scanned,
+                "module_execution_counts": dict(self.metadata.module_execution_counts),
+                "module_input_execution_counts": dict(
+                    self.metadata.module_input_execution_counts
+                ),
+                "module_extracted_execution_counts": dict(
+                    self.metadata.module_extracted_execution_counts
+                ),
+                "finding_groups": len(grouped_findings),
+                "finding_instances": finding_instances,
                 "tool_version": self.metadata.tool_version,
             },
             "summary": self.summary_counts(),
-            "findings": [f.to_dict() for f in self.sorted_findings()],
-            "module_errors": self.module_errors,
+            "findings": grouped_findings,
+            "module_errors": [
+                normalize_diagnostic_paths(error, root)
+                for error in self.module_errors
+            ],
         }
 
 
@@ -72,9 +121,9 @@ def run_scan(
     rules_dir: str | Path | None = None,
     enable_entropy: bool = True,
     scan_pe_strings: bool = True,
-    services_file: str | Path | None = None,
     use_osslsigncode: bool = True,
     single_file: str | Path | None = None,
+    services_file: str | Path | None = None,
     vt_api_key: str | None = None,
     vt_include_clean: bool = False,
     vt_max_lookups: int = 15,
@@ -126,12 +175,20 @@ def run_scan(
     metadata = ScanMetadata(target_path=str(single_file) if single_file else str(target_dir))
     all_findings: list[Finding] = []
     module_errors: list[str] = []
-    files_scanned = {"count": 0}
+    scanned_file_paths: set[str] = set()
+    extracted_file_paths: set[str] = set()
+    module_execution_counts: dict[str, int] = {}
+    module_input_execution_counts: dict[str, int] = {}
+    module_extracted_execution_counts: dict[str, int] = {}
     scan_cache = ScanCache(target_dir, enabled=incremental, cache_file=cache_file)
 
-    def _wrapped_progress(path: str):
-        files_scanned["count"] += 1
-        if progress_callback:
+    def _wrapped_progress(path: str, extracted: bool = False):
+        normalized_path = os.path.normcase(str(Path(path).resolve()))
+        is_new_path = normalized_path not in scanned_file_paths
+        scanned_file_paths.add(normalized_path)
+        if extracted:
+            extracted_file_paths.add(normalized_path)
+        if progress_callback and is_new_path:
             progress_callback(path)
 
     def _wrapped_error(message: str):
@@ -140,8 +197,15 @@ def run_scan(
         if error_callback:
             error_callback(message)
 
-    def _run_module(name: str, func, **kwargs) -> list[Finding]:
+    def _run_module(name: str, func, *, extracted: bool = False, **kwargs) -> list[Finding]:
         started = datetime.now(timezone.utc)
+        module_execution_counts[name] = module_execution_counts.get(name, 0) + 1
+        phase_counts = (
+            module_extracted_execution_counts
+            if extracted
+            else module_input_execution_counts
+        )
+        phase_counts[name] = phase_counts.get(name, 0) + 1
         try:
             logger.info("Starting module: %s", name)
             result = func(error_callback=_wrapped_error, **kwargs)
@@ -154,12 +218,19 @@ def run_scan(
             _wrapped_error(f"{name} module failed and was skipped: {e}")
             return []
 
-    def _dispatch_modules(t_dir: Path, s_file: Path | None) -> list[Finding]:
+    def _dispatch_modules(
+        t_dir: Path,
+        s_file: Path | None,
+        extracted: bool = False,
+    ) -> list[Finding]:
         """Runs every requested module against (t_dir, s_file) and returns
         its findings. Pulled out into its own function so the exact same
         dispatch logic can run a second time against extracted archive
         content, instead of duplicating each `if "x" in modules:` block."""
         findings: list[Finding] = []
+
+        def report_progress(path: str) -> None:
+            _wrapped_progress(path, extracted=extracted)
 
         if "secrets" in modules:
             findings.extend(_run_module(
@@ -169,9 +240,10 @@ def run_scan(
                 enable_entropy=enable_entropy,
                 scan_pe_strings=scan_pe_strings,
                 single_file=s_file,
-                progress_callback=_wrapped_progress,
+                progress_callback=report_progress,
                 scan_cache=scan_cache,
                 max_workers=max_workers,
+                extracted=extracted,
             ))
 
         if "dll_hijack" in modules:
@@ -180,13 +252,24 @@ def run_scan(
                 target_dir=t_dir,
                 services_file=services_file,
                 single_file=s_file,
-                progress_callback=_wrapped_progress,
+                progress_callback=report_progress,
+                extracted=extracted,
             ))
 
         if plugins_dir:
             detectors = load_python_detectors(plugins_dir)
             if detectors:
+                module_execution_counts["plugins"] = (
+                    module_execution_counts.get("plugins", 0) + 1
+                )
+                phase_counts = (
+                    module_extracted_execution_counts
+                    if extracted
+                    else module_input_execution_counts
+                )
+                phase_counts["plugins"] = phase_counts.get("plugins", 0) + 1
                 for path in iter_all_files(t_dir, single_file=s_file):
+                    _wrapped_progress(str(path), extracted=extracted)
                     try:
                         findings.extend(run_python_detectors(detectors, path))
                     except Exception as e:
@@ -198,7 +281,8 @@ def run_scan(
                 target_dir=t_dir,
                 use_osslsigncode=use_osslsigncode,
                 single_file=s_file,
-                progress_callback=_wrapped_progress,
+                progress_callback=report_progress,
+                extracted=extracted,
             ))
 
         if "re_exposure" in modules:
@@ -206,9 +290,10 @@ def run_scan(
                 "re_exposure", re_exposure_module.run,
                 target_dir=t_dir,
                 single_file=s_file,
-                progress_callback=_wrapped_progress,
+                progress_callback=report_progress,
                 yara_rules_dir=yara_rules_dir,
                 scan_cache=scan_cache,
+                extracted=extracted,
             ))
 
         if "linux" in modules:
@@ -218,8 +303,9 @@ def run_scan(
                 rules_dir=rules_dir,
                 enable_entropy=enable_entropy,
                 single_file=s_file,
-                progress_callback=_wrapped_progress,
+                progress_callback=report_progress,
                 include_inventory=include_inventory,
+                extracted=extracted,
             ))
 
         if "macos" in modules:
@@ -229,8 +315,9 @@ def run_scan(
                 rules_dir=rules_dir,
                 enable_entropy=enable_entropy,
                 single_file=s_file,
-                progress_callback=_wrapped_progress,
+                progress_callback=report_progress,
                 include_inventory=include_inventory,
+                extracted=extracted,
             ))
 
         if "reputation" in modules:
@@ -242,7 +329,8 @@ def run_scan(
                 include_clean=vt_include_clean,
                 max_lookups=vt_max_lookups,
                 upload_unknown=vt_upload_unknown,
-                progress_callback=_wrapped_progress,
+                progress_callback=report_progress,
+                extracted=extracted,
             ))
 
         return findings
@@ -271,14 +359,23 @@ def run_scan(
             for warning in extraction.warnings:
                 _wrapped_error(f"archive extraction ({candidate.name}): {warning}")
             if extraction.root and extraction.extracted_files:
-                nested_findings = _dispatch_modules(extraction.root, None)
+                nested_findings = _dispatch_modules(
+                    extraction.root, None, extracted=True
+                )
                 for f in nested_findings:
                     f.extra["extracted_from"] = str(candidate)
                     f.tags = list(set(f.tags + ["extracted-content"]))
                 all_findings.extend(nested_findings)
             cleanup_extraction(extraction)
 
-    metadata.files_scanned = files_scanned["count"]
+    metadata.files_scanned = len(scanned_file_paths)
+    metadata.extracted_files_scanned = len(extracted_file_paths)
+    metadata.input_files_scanned = len(
+        scanned_file_paths - extracted_file_paths
+    )
+    metadata.module_execution_counts = dict(module_execution_counts)
+    metadata.module_input_execution_counts = dict(module_input_execution_counts)
+    metadata.module_extracted_execution_counts = dict(module_extracted_execution_counts)
     metadata.finished_at = datetime.now(timezone.utc).isoformat()
     scan_cache.save()
 

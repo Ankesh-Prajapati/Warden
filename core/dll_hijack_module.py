@@ -6,9 +6,9 @@ Covers, per the project spec:
   - DLL search order exposure: binaries that call LoadLibrary(Ex) without
     any safe-loading API (SetDllDirectory, SetDefaultDllDirectories,
     AddDllDirectory) are vulnerable to search-order planting
-  - Phantom DLL hijacking: imports that resolve to neither a known Windows
-    system DLL nor a file present in the app's own directory tree — those
-    are plantable by an attacker who can write anywhere in the search path
+  - Unbundled DLL import indicators: imports not matched to the known system
+    DLL catalog or application bundle, without assuming the target OS lacks
+    them or that the loader can be hijacked
   - Writable install/working directories (classic hijack precondition)
   - Unquoted service path issues in Windows service binPaths (same
     vulnerability class, cheap to check via .reg exports or a services-file)
@@ -24,7 +24,6 @@ from pathlib import Path
 import yaml
 
 from core.fs_walk import check_permissive_permissions, find_pe_files
-from core.dll_poc_generator import build_hijack_poc_text
 from core.models import Finding, Severity
 from core.pe_utils import PEInfo, get_security_mitigations, is_pe_file, parse_pe
 
@@ -327,25 +326,16 @@ def _search_order_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
             tags=["dll-hijack", "search-order"],
             confidence="Medium",
             poc=(
-                f"1. Confirm the imports directly with a PE inspection tool:\n"
-                f"     Windows: dumpbin /imports \"{pe_path}\"   (or open in CFF Explorer / PE-bear)\n"
-                f"     Linux:   python3 -c \"import pefile; pe=pefile.PE(r'{pe_path}'); "
-                f"[print(e.dll) for e in pe.DIRECTORY_ENTRY_IMPORT]\"\n"
-                f"   Confirm LoadLibrary(A/W) is imported and no obvious search-order "
-                f"restriction calls are present.\n\n"
-                f"2. Identify a DLL this binary loads by bare name (via Process Monitor "
-                f"with a 'Load Image' filter while running the binary from a writable "
-                f"working directory):\n"
-                f"     procmon.exe  (filter: Process Name is \"{Path(pe_path).name}\", "
-                f"Operation is \"Load Image\", Result is \"NAME NOT FOUND\")\n\n"
-                f"3. For any DLL Procmon shows being searched for in the current working "
-                f"directory (and not found there), place a proof-of-concept DLL with that "
-                f"exact name in the working directory used to launch the application. A "
-                f"minimal PoC DLL just needs a DllMain that writes to a log file on load.\n\n"
-                f"4. Re-run the application from that working directory and confirm the "
-                f"planted DLL's DllMain executed (check the PoC log file), demonstrating "
-                f"arbitrary code execution in this process's context via search-order "
-                f"hijacking."
+                "1. Review the PE import table and disassemble the call sites that "
+                "invoke dynamic loading. Confirm the DLL name, LoadLibrary variant, "
+                "and flags or path supplied at each call site.\n"
+                "2. Review the relevant Windows loader policy and directory ACLs for "
+                "the supported OS and launch configuration. Imports alone do not "
+                "establish which directories are searched or that an attacker can "
+                "write to one of them.\n"
+                "3. Do not modify or run the scanned application with a planted DLL. "
+                "Any runtime loader validation must use a deliberately isolated, "
+                "authorized lab fixture."
             ),
         )
     return None
@@ -361,39 +351,62 @@ def _phantom_dll_findings(
 
     for dll_name in pe_info.imported_dlls:
         lname = dll_name.lower()
-        if lname in known_system_dlls:
-            continue
-        if lname in local_dll_inventory:
-            continue  # resolves locally — not phantom (writable-dir risk covered separately)
+        # Check if the DLL is a known system DLL (exact or wildcard match)
+        is_known_system = False
+        for pattern in known_system_dlls:
+            if pattern.endswith('*'):
+                if lname.startswith(pattern[:-1]):
+                    is_known_system = True
+                    break
+            else:
+                if lname == pattern:
+                    is_known_system = True
+                    break
+        if is_known_system or lname in local_dll_inventory:
+            continue  # resolves locally or is a known system DLL — not phantom (writable-dir risk covered separately)
 
         findings.append(
             Finding(
                 module="dll_hijack",
                 rule_id="phantom-dll-import",
-                title=f"Phantom/unresolved DLL import: {dll_name}",
-                severity=Severity.HIGH,
+                title=f"Unbundled DLL import: {dll_name}",
+                severity=Severity.INFO,
                 file_path=str(pe_path),
-                evidence=f"Imports '{dll_name}', not found in app directory tree or known-system-DLL list",
+                evidence=(
+                    f"Imports '{dll_name}', not present in the scanned application bundle "
+                    "or the known system-DLL catalog"
+                ),
                 description=(
-                    f"'{dll_name}' is imported by this binary but is neither a "
-                    f"recognized Windows system DLL nor present anywhere in the "
-                    f"scanned application directory. If this DLL is genuinely "
-                    f"missing at runtime, the default DLL search order will let "
-                    f"an attacker plant a malicious DLL with this name in a "
-                    f"searched directory (application directory, current working "
-                    f"directory, or PATH) to achieve code execution in this "
-                    f"process's context."
+                    f"'{dll_name}' is imported by this binary but was not found "
+                    "inside the scanned application bundle or the conservative "
+                    "known-system-DLL catalog. A static bundle scan cannot "
+                    "determine whether the target Windows installation provides "
+                    "this dependency, or whether its loader resolution is unsafe. "
+                    "This is an unbundled dependency indicator, not evidence of "
+                    "a missing runtime DLL or a confirmed hijack."
                 ),
                 remediation=(
-                    "Confirm whether this DLL is expected to be present on the "
-                    "target system. If so, verify it's installed with correct "
-                    "permissions from a trusted source; if it's an optional/"
-                    "plugin dependency, load it via a fully-qualified path rather "
-                    "than relying on search order."
+                    "Check the vendor's dependency manifest and supported Windows "
+                    "versions. Validate the dependency's trusted installation "
+                    "source and actual load path from authorized system telemetry; "
+                    "do not infer target-system absence from its absence in the "
+                    "application bundle."
                 ),
-                tags=["dll-hijack", "phantom-dll"],
-                confidence="Medium",  # our known-system-DLL list isn't exhaustive
-                poc=build_hijack_poc_text(dll_name, pe_info.imported_functions.get(dll_name, []), get_security_mitigations(pe_path).is_64bit),
+                tags=["dll-import", "external-dependency"],
+                confidence="High",
+                poc=(
+                    "Static verification:\n"
+                    f"  1. Confirm '{dll_name}' in the PE import table with "
+                    "dumpbin /imports or a PE inspection tool.\n"
+                    "  2. Check the vendor's package/dependency manifest and "
+                    "documentation for supported Windows releases.\n"
+                    "  3. Do not treat absence from this application's directory "
+                    "as absence from the target OS, and do not plant or replace "
+                    "a DLL to validate this static indicator. If loader behavior "
+                    "must be studied, use a deliberately isolated, authorized "
+                    "lab fixture and observe load paths without modifying the "
+                    "application or system."
+                ),
             )
         )
 
@@ -423,22 +436,15 @@ def _writable_directory_finding(pe_path: Path) -> Finding | None:
             tags=["dll-hijack", "permissions"],
             confidence="Medium",
             poc=(
-                f"1. Confirm the permissive ACL directly:\n"
+                f"1. Review the directory ACL without modifying it:\n"
                 f"     icacls \"{pe_path.parent}\"\n"
-                f"   Look for an ACE granting (F), (M), or (W) to Everyone, "
-                f"Authenticated Users, or Users (BUILTIN\\Users) without a "
-                f"corresponding legitimate business reason.\n\n"
-                f"2. From a low-privileged, non-administrator account, attempt to "
-                f"write a test file into the directory:\n"
-                f"     echo poc-write-test > \"{pe_path.parent}\\poc_write_test.txt\"\n\n"
-                f"3. If the write succeeds, this confirms a local low-privileged "
-                f"attacker can drop or replace files here. Combine with any "
-                f"phantom-dll-import or dll-search-order-exposure finding above for "
-                f"this same binary to demonstrate a full DLL-planting attack chain: "
-                f"place a malicious DLL matching a missing/searched dependency name "
-                f"in this directory, then trigger the application to load it.\n\n"
-                f"4. Clean up the test file after confirming: "
-                f"del \"{pe_path.parent}\\poc_write_test.txt\""
+                f"   Identify which principals have write or modify access and "
+                f"compare them with the approved installation baseline.\n\n"
+                f"2. This static permission observation does not establish that "
+                f"an untrusted user can exploit a DLL search path or replace a "
+                f"loaded component. Do not write files or plant DLLs in the "
+                f"application directory. If write behavior itself needs testing, "
+                f"use a separate, deliberately isolated, authorized lab fixture."
             ),
         )
     return None

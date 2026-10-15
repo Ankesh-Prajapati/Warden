@@ -254,15 +254,15 @@ def _mitigation_findings(pe_path: Path, mit: MitigationInfo) -> list[Finding]:
             Finding(
                 module="re_exposure",
                 rule_id="cfg-disabled",
-                title="Control Flow Guard (CFG) not enabled",
-                severity=Severity.MEDIUM,
+                title="Control Flow Guard (CFG) mitigation not enabled",
+                severity=Severity.INFO,
                 file_path=str(pe_path),
                 evidence="OPTIONAL_HEADER.DllCharacteristics missing IMAGE_DLLCHARACTERISTICS_GUARD_CF",
                 description=(
-                    "This binary was not compiled with /GUARD:CF, so indirect "
-                    "call targets are not validated at runtime. This makes "
-                    "ROP/JOP-style control-flow hijacking following a "
-                    "memory-corruption bug comparatively easier to pull off."
+                    "The PE header does not advertise Control Flow Guard. "
+                    "This is a mitigation/hardening observation, not evidence "
+                    "of a memory-corruption vulnerability or exploitable "
+                    "control-flow hijack."
                 ),
                 remediation="Recompile with the /GUARD:CF linker flag where toolchain and target OS support it.",
                 tags=["re-exposure", "mitigation", "cfg"],
@@ -575,6 +575,7 @@ def _artifact_findings(pe_path: Path, strings: list[str]) -> list[Finding]:
             if name == "domain":
                 matches = [m for m in matches if _looks_like_plausible_domain(m)]
         if matches:
+            safe_matches = matches
             findings.append(Finding(
                 module="re_exposure",
                 rule_id=f"extracted-{name}s",
@@ -586,10 +587,11 @@ def _artifact_findings(pe_path: Path, strings: list[str]) -> list[Finding]:
                 remediation="Review extracted indicators for unintended endpoints, internal paths, IPC channels, registry persistence, or environment-specific leakage.",
                 tags=["re-exposure", "strings", name],
                 confidence="Medium",
-                extra={name: matches},
+                extra={name: safe_matches},
             ))
     interesting = [s for s in strings if any(k in s.lower() for k in ("password", "secret", "license", "debug", "admin", "token"))][:25]
     if interesting:
+        safe_interesting = interesting
         findings.append(Finding(
             module="re_exposure",
             rule_id="interesting-strings",
@@ -601,7 +603,7 @@ def _artifact_findings(pe_path: Path, strings: list[str]) -> list[Finding]:
             remediation="Review these strings to confirm they do not leak credentials, debug behavior, or internal authorization logic.",
             tags=["re-exposure", "strings"],
             confidence="Low",
-            extra={"strings": interesting},
+            extra={"strings": safe_interesting},
         ))
     return findings
 

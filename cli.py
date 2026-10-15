@@ -134,16 +134,28 @@ def scan(target, output, json_output, rules_dir, no_entropy, no_pe_strings, modu
     counts = result.summary_counts()
     table = Table(title="Findings Summary")
     table.add_column("Severity")
-    table.add_column("Count", justify="right")
-    for sev, count in counts.items():
-        table.add_row(sev, str(count))
+    table.add_column("Unique Issues", justify="right")
+    table.add_column("Instances", justify="right")
+    for sev, count in counts["unique"].items():
+        table.add_row(sev, str(count), str(counts["instances"][sev]))
+    info_unique = sum(counts["info_unique"].values())
+    info_instances = sum(counts["info_instances"].values())
+    table.add_row("Info", str(info_unique), str(info_instances))
+    table.add_row(
+        "Total vulnerabilities",
+        str(sum(counts["unique"].values())),
+        str(sum(counts["instances"].values())),
+    )
     console.print(table)
 
     html_path = generate_html_report(result, output)
     console.print(f"[bold green]HTML report written:[/bold green] {html_path}")
 
     if json_output:
-        Path(json_output).write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
+        json_path = Path(json_output)
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_content = json.dumps(result.to_dict(), indent=2)
+        json_path.write_text(json_content, encoding="utf-8")
         console.print(f"[bold green]JSON findings written:[/bold green] {json_output}")
 
 

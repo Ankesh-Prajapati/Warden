@@ -48,19 +48,23 @@ class Finding:
     title: str                        # short human title
     severity: Severity
     file_path: str                    # path to the file the finding came from
-    evidence: str                     # evidence snippet (full value, local report only)
+    evidence: str                     # original extracted evidence
     description: str = ""             # longer explanation of the issue
     remediation: str = ""             # fix guidance
     poc: str = ""                     # detailed proof-of-concept / reproduction steps
     line_number: Optional[int] = None
+    column_number: Optional[int] = None
     offset: Optional[int] = None      # byte offset (for binary findings)
     tags: list[str] = field(default_factory=list)
     confidence: str = "Medium"        # Low/Medium/High - reduces FP noise in report
     extra: dict = field(default_factory=dict)  # module-specific structured data
 
     def fingerprint(self) -> str:
-        """Stable dedup key: same rule + file + evidence shouldn't double-count."""
-        raw = f"{self.module}|{self.rule_id}|{self.file_path}|{self.evidence}"
+        """Deduplicate repeated emissions, but retain distinct source locations."""
+        raw = (
+            f"{self.module}|{self.rule_id}|{self.file_path}|"
+            f"{self.line_number}|{self.column_number}|{self.offset}"
+        )
         return hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()[:16]
 
     def to_dict(self) -> dict:
@@ -75,6 +79,7 @@ class Finding:
             "remediation": self.remediation,
             "poc": self.poc,
             "line_number": self.line_number,
+            "column_number": self.column_number,
             "offset": self.offset,
             "tags": self.tags,
             "confidence": self.confidence,
@@ -90,11 +95,9 @@ class ScanMetadata:
     started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     finished_at: Optional[str] = None
     files_scanned: int = 0
+    input_files_scanned: int = 0
+    extracted_files_scanned: int = 0
+    module_execution_counts: dict[str, int] = field(default_factory=dict)
+    module_input_execution_counts: dict[str, int] = field(default_factory=dict)
+    module_extracted_execution_counts: dict[str, int] = field(default_factory=dict)
     tool_version: str = "0.1.0"
-
-
-def redact(value: str, keep: int = 4) -> str:
-    """Redact a secret for safe display in reports: keep first/last `keep` chars."""
-    if len(value) <= keep * 2:
-        return "*" * len(value)
-    return f"{value[:keep]}{'*' * (len(value) - keep * 2)}{value[-keep:]}"

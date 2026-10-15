@@ -19,6 +19,25 @@ from core.scanner import ScanResult, run_scan
 logger = get_logger("desktop.worker")
 
 
+def format_scan_summary(counts: dict) -> str:
+    """Format vulnerability and informational totals without exposing dict syntax."""
+    unique = counts.get("unique", {})
+    instances = counts.get("instances", {})
+    info_unique = counts.get("info_unique", {}).get("Info", 0)
+    info_instances = counts.get("info_instances", {}).get("Info", 0)
+    unique_total = sum(unique.values())
+    instance_total = sum(instances.values())
+    severity_summary = ", ".join(
+        f"{severity} {unique.get(severity, 0)}/{instances.get(severity, 0)}"
+        for severity in ("Critical", "High", "Medium", "Low")
+    )
+    return (
+        f"{unique_total} unique issue(s), {instance_total} instance(s) - "
+        f"{severity_summary}, Info {info_unique}/{info_instances} "
+        "(unique issues/instances)"
+    )
+
+
 class ScanWorker(QObject):
     """Lives inside a QThread; do not touch widgets directly from its slots."""
 
@@ -105,9 +124,8 @@ class ScanWorker(QObject):
                 "dim",
             )
 
-        counts = result.summary_counts()
         self.log_line.emit(
-            "Scan complete. Findings: " + ", ".join(f"{k}={v}" for k, v in counts.items()),
+            "Scan complete. " + format_scan_summary(result.summary_counts()),
             "ok",
         )
         self.finished.emit(result)

@@ -98,9 +98,9 @@ def _application_discovery(target_dir: Path, macho_files: list[Path]) -> list[Fi
                 continue
             findings.append(_mk(
                 "Application Discovery", "Info.plist Bundle Metadata", "Info",
-                evidence=(f"CFBundleIdentifier={data.get('CFBundleIdentifier', '?')}, "
+                evidence=f"CFBundleIdentifier={data.get('CFBundleIdentifier', '?')}, "
                           f"CFBundleShortVersionString={data.get('CFBundleShortVersionString', '?')}, "
-                          f"CFBundleExecutable={data.get('CFBundleExecutable', '?')}"),
+                          f"CFBundleExecutable={data.get('CFBundleExecutable', '?')}",
                 description="App bundle metadata identifies the application, version, and main executable.",
                 recommendation="Confirm the bundle identifier and version match the vendor's published release.",
                 file_path=str(p),

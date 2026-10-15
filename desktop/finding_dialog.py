@@ -70,10 +70,10 @@ class FindingDialog(QDialog):
         meta.setStyleSheet(f"color: {theme.get_palette()['MUTED']}; font-size: 11.5px;")
         outer.addWidget(meta)
 
-        locations = f.get("locations") or [
-            f["file_path"] + (f"  (line {f['line_number']})" if f.get("line_number") else "")
-        ]
-        count_label = QLabel(f"{len(locations)} affected location{'s' if len(locations) != 1 else ''}")
+        occurrences = f.get("occurrences") or [f]
+        count_label = QLabel(
+            f"{len(occurrences)} affected occurrence{'s' if len(occurrences) != 1 else ''}"
+        )
         count_label.setTextFormat(Qt.TextFormat.PlainText)
         count_label.setStyleSheet(f"font-family: Consolas, monospace; font-size: 11.5px; color: {theme.get_palette()['ACCENT_SOFT']};")
         count_label.setWordWrap(True)
@@ -87,13 +87,13 @@ class FindingDialog(QDialog):
         body_layout.setSpacing(14)
 
         body_layout.addWidget(_section("Description", f.get("description", "")))
-        body_layout.addWidget(_section("Affected Locations", "\n".join(locations)))
-        body_layout.addWidget(_section("Evidence", f.get("evidence", "")))
-        contexts = [c for c in f.get("contexts", []) if c]
-        if not contexts and f.get("extra", {}).get("context"):
-            contexts = [f["extra"]["context"]]
-        if contexts:
-            body_layout.addWidget(_section("Code Context", "\n\n---\n\n".join(contexts[:10])))
+        occurrence_heading = QLabel("Occurrences")
+        occurrence_heading.setStyleSheet(
+            f"font-weight: 700; font-size: 11px; color: {theme.get_palette()['MUTED']};"
+        )
+        body_layout.addWidget(occurrence_heading)
+        for index, occurrence in enumerate(occurrences, start=1):
+            body_layout.addWidget(self._occurrence_widget(index, occurrence))
         body_layout.addWidget(_section("Remediation", f.get("remediation", "")))
         if f.get("poc"):
             body_layout.addWidget(_section("Proof of Concept", f["poc"]))
@@ -110,3 +110,60 @@ class FindingDialog(QDialog):
         close_btn.clicked.connect(self.accept)
         footer.addWidget(close_btn)
         outer.addLayout(footer)
+
+    def _occurrence_widget(self, index: int, occurrence: dict) -> QWidget:
+        palette = theme.get_palette()
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+        container.setObjectName("findingOccurrence")
+        container.setStyleSheet(
+            f"QWidget#findingOccurrence {{ border: 1px solid {palette['BORDER']}; border-radius: 6px; }}"
+        )
+
+        location = occurrence.get("file_path") or occurrence.get("location", "-")
+        metadata = [f"{index}. {location}"]
+        if occurrence.get("offset") is not None:
+            metadata.append(f"offset 0x{occurrence['offset']:X}")
+        elif occurrence.get("line_number"):
+            line = f"line {occurrence['line_number']}"
+            if occurrence.get("column_number") is not None:
+                line += f", column {occurrence['column_number']}"
+            metadata.append(line)
+        metadata.append(f"confidence {occurrence.get('confidence', 'Medium')}")
+        label = QLabel("  |  ".join(metadata))
+        label.setTextFormat(Qt.TextFormat.PlainText)
+        label.setWordWrap(True)
+        header = QHBoxLayout()
+        header.addWidget(label, stretch=1)
+        expand = QPushButton("Show details")
+        expand.setCheckable(True)
+        header.addWidget(expand)
+        layout.addLayout(header)
+
+        details = QWidget()
+        details_layout = QVBoxLayout(details)
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        details_layout.setSpacing(6)
+        evidence = QPlainTextEdit(occurrence.get("evidence") or "-")
+        evidence.setReadOnly(True)
+        evidence.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        evidence.setMinimumHeight(55)
+        evidence.setMaximumHeight(150)
+        details_layout.addWidget(evidence)
+
+        context = occurrence.get("context") or (occurrence.get("extra") or {}).get("context")
+        if context:
+            details_layout.addWidget(_section("Code Context", context))
+        if occurrence.get("poc"):
+            details_layout.addWidget(_section("Proof of Concept", occurrence["poc"]))
+        details.hide()
+
+        def set_details_visible(checked: bool) -> None:
+            details.setVisible(checked)
+            expand.setText("Hide details" if checked else "Show details")
+
+        expand.toggled.connect(set_details_visible)
+        layout.addWidget(details)
+        return container

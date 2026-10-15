@@ -22,15 +22,17 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QSpinBox,
+    QStackedWidget,
     QStatusBar,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -38,6 +40,7 @@ from PySide6.QtWidgets import (
 from core.logging_config import get_logger
 from core.finding_grouping import group_findings
 from core.models import Finding
+from core.path_utils import scan_root
 from report.html_export import generate_html_report
 
 from desktop.finding_dialog import FindingDialog
@@ -59,15 +62,21 @@ def _application_root() -> Path:
 REPORTS_DIR = _application_root() / "reports"
 
 COMMON_MODULES = [
-    ("secrets", "Secrets && Config Exposure"),
-    ("dll_hijack", "DLL Hijacking Detection"),
-    ("signature", "Signature / Integrity Check"),
-    ("re_exposure", "RE / Anti-Tamper Exposure"),
+    ("secrets", "Secrets && config"),
+    ("dll_hijack", "DLL hijacking"),
+    ("signature", "Signature integrity"),
+    ("re_exposure", "RE / anti-tamper"),
 ]
 PLATFORM_MODULES = [
-    ("linux", "Linux Thick-Client Assessment"),
-    ("macos", "macOS Thick-Client Assessment"),
+    ("linux", "Linux client assessment"),
+    ("macos", "macOS client assessment"),
 ]
+MODULE_TOOLTIPS = {
+    "secrets": "Secrets and configuration exposure detection",
+    "dll_hijack": "DLL hijacking detection",
+    "signature": "Authenticode signature and file integrity checks",
+    "re_exposure": "Reverse-engineering and anti-tamper exposure",
+}
 
 FILE_EXTENSIONS = (".exe", ".dll", ".sys", ".ocx")
 
@@ -77,6 +86,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Warden — Static Security Analysis")
         self.resize(1180, 820)
+        self.setMinimumSize(860, 600)
 
         icon_path = Path(__file__).resolve().parent.parent / "assets" / "logo.ico"
         if icon_path.exists():
@@ -105,6 +115,7 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self._load_settings_into_ui()
         self._update_target_hint()
+        self._set_results_state("ready")
 
         geometry = self.settings.load_geometry()
         if geometry:
@@ -278,11 +289,34 @@ class MainWindow(QMainWindow):
         central = QWidget()
         central.setObjectName("centralWidget")
         self.setCentralWidget(central)
-        root = QHBoxLayout(central)
+        root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
+        header = QWidget()
+        header.setObjectName("appHeader")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(18, 9, 20, 9)
+        header_layout.setSpacing(10)
+        brand = QLabel("WARDEN")
+        brand.setObjectName("brandTitle")
+        header_layout.addWidget(brand)
+        divider = QLabel("/")
+        divider.setObjectName("subheading")
+        header_layout.addWidget(divider)
+        subtitle = QLabel("STATIC SECURITY ANALYSIS")
+        subtitle.setObjectName("brandSubtitle")
+        header_layout.addWidget(subtitle)
+        header_layout.addStretch()
+        context = QLabel("LOCAL ANALYSIS  ·  WINDOWS / LINUX / MACOS")
+        context.setObjectName("headerContext")
+        header_layout.addWidget(context)
+        root.addWidget(header)
+
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.setHandleWidth(5)
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.setOpaqueResize(True)
         root.addWidget(self._splitter)
 
         self._splitter.addWidget(self._build_config_panel())
@@ -296,10 +330,13 @@ class MainWindow(QMainWindow):
         # off on first launch until something forced a relayout. Deferring
         # to a 0ms singleShot runs this once the event loop has processed
         # the initial show() and real geometry exists.
-        QTimer.singleShot(0, lambda: self._splitter.setSizes([420, 760]))
+        QTimer.singleShot(0, lambda: self._splitter.setSizes([380, 800]))
+        root.addWidget(self._splitter, stretch=1)
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        self.status_state_label = QLabel("Ready")
+        self.status_bar.addWidget(self.status_state_label)
         self.status_files_label = QLabel("0 files scanned")
         self.status_bar.addPermanentWidget(self.status_files_label)
 
@@ -307,23 +344,23 @@ class MainWindow(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setMinimumWidth(380)
-        scroll.setMaximumWidth(520)
+        scroll.setMinimumWidth(340)
+        scroll.setMaximumWidth(440)
         # The config panel (target/modules/options/VirusTotal/run controls)
         # is consistently taller than a typical window — without this, the
         # scrollbar only appears once content is already cut off and is
         # easy to miss entirely, making whole sections (e.g. VirusTotal)
         # look like they don't exist rather than "scroll down for more."
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(14)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(10)
 
-        heading = QLabel("Warden")
+        heading = QLabel("Scan configuration")
         heading.setObjectName("heading")
-        subheading = QLabel("Static security analysis for thick-client applications")
+        subheading = QLabel("Choose a target and analysis coverage.")
         subheading.setObjectName("subheading")
         subheading.setWordWrap(True)
         layout.addWidget(heading)
@@ -334,15 +371,19 @@ class MainWindow(QMainWindow):
         tg_layout = QVBoxLayout(target_group)
         row = QHBoxLayout()
         self.target_input = QLineEdit()
+        self.target_input.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.target_input.setMinimumWidth(0)
         self.target_input.setPlaceholderText("C:\\Apps\\TargetApp  or  /home/user/target_app")
         self.target_input.textChanged.connect(self._on_target_changed)
         row.addWidget(self.target_input, stretch=1)
         tg_layout.addLayout(row)
 
         btn_row = QHBoxLayout()
-        browse_folder_btn = QPushButton("📁 Select Folder")
+        browse_folder_btn = QPushButton("Folder")
+        browse_folder_btn.setToolTip("Select a folder to scan")
         browse_folder_btn.clicked.connect(self._browse_folder)
-        browse_file_btn = QPushButton("📄 Select EXE")
+        browse_file_btn = QPushButton("File")
+        browse_file_btn.setToolTip("Select an executable file to scan")
         browse_file_btn.clicked.connect(self._browse_file)
         btn_row.addWidget(browse_folder_btn)
         btn_row.addWidget(browse_file_btn)
@@ -360,15 +401,17 @@ class MainWindow(QMainWindow):
         mg_layout = QVBoxLayout(modules_group)
         for module_id, label in COMMON_MODULES:
             cb = QCheckBox(label)
+            cb.setToolTip(MODULE_TOOLTIPS[module_id])
             cb.setChecked(True)
             self._module_checks[module_id] = cb
             mg_layout.addWidget(cb)
         layout.addWidget(modules_group)
 
-        platform_group = QGroupBox("2b · Platform-Specific Modules")
+        platform_group = QGroupBox("2b · Platform modules")
         pg_layout = QVBoxLayout(platform_group)
         for module_id, label in PLATFORM_MODULES:
             cb = QCheckBox(label)
+            cb.setToolTip(f"{label.split()[0]} thick-client assessment")
             cb.setChecked(False)
             self._module_checks[module_id] = cb
             pg_layout.addWidget(cb)
@@ -377,13 +420,21 @@ class MainWindow(QMainWindow):
         # -- Options ------------------------------------------------------
         options_group = QGroupBox("3 · Options")
         og_layout = QVBoxLayout(options_group)
-        self.opt_entropy = QCheckBox("Entropy-based secret detection")
+        self.opt_entropy = QCheckBox("Entropy secret detection")
+        self.opt_entropy.setToolTip("Use entropy-based secret detection")
         self.opt_entropy.setChecked(True)
-        self.opt_pestrings = QCheckBox("Scan embedded strings inside .exe/.dll")
+        self.opt_pestrings = QCheckBox("Scan strings in PE files")
+        self.opt_pestrings.setToolTip("Scan embedded strings inside .exe/.dll files")
         self.opt_pestrings.setChecked(True)
-        self.opt_osslsigncode = QCheckBox("Use osslsigncode for deep signature verification (if installed)")
+        self.opt_osslsigncode = QCheckBox("Deep signature check")
+        self.opt_osslsigncode.setToolTip(
+            "Use osslsigncode for deep signature verification when it is installed"
+        )
         self.opt_osslsigncode.setChecked(True)
-        self.opt_include_inventory = QCheckBox("Show inventory/pass findings in Linux/macOS scans")
+        self.opt_include_inventory = QCheckBox("Inventory findings")
+        self.opt_include_inventory.setToolTip(
+            "Show inventory/pass findings in Linux/macOS scans"
+        )
         self.opt_include_inventory.setChecked(True)
         og_layout.addWidget(self.opt_entropy)
         og_layout.addWidget(self.opt_pestrings)
@@ -392,14 +443,17 @@ class MainWindow(QMainWindow):
 
         services_label = QLabel("Services file (optional — sc query / wmic output):")
         services_label.setObjectName("subheading")
+        services_label.setWordWrap(True)
         og_layout.addWidget(services_label)
         self.services_input = QLineEdit()
+        self.services_input.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.services_input.setMinimumWidth(0)
         self.services_input.setPlaceholderText("/path/to/services_dump.txt")
         og_layout.addWidget(self.services_input)
         layout.addWidget(options_group)
 
         # -- VirusTotal reputation ------------------------------------------
-        vt_group = QGroupBox("4 · VirusTotal Reputation Check")
+        vt_group = QGroupBox("4 · VirusTotal")
         vt_layout = QVBoxLayout(vt_group)
 
         vt_desc = QLabel(
@@ -410,11 +464,14 @@ class MainWindow(QMainWindow):
         vt_desc.setWordWrap(True)
         vt_layout.addWidget(vt_desc)
 
-        self.opt_reputation = QCheckBox("Enable reputation check for this scan")
+        self.opt_reputation = QCheckBox("Enable VirusTotal checks")
+        self.opt_reputation.setToolTip("Enable VirusTotal reputation checks for this scan")
         vt_layout.addWidget(self.opt_reputation)
 
         max_lookups_row = QHBoxLayout()
-        max_lookups_label = QLabel("Max binaries to check per scan:")
+        max_lookups_label = QLabel("Max lookups per scan:")
+        max_lookups_label.setWordWrap(True)
+        max_lookups_label.setToolTip("Maximum number of binaries to check per scan")
         self.vt_max_lookups_input = QSpinBox()
         self.vt_max_lookups_input.setRange(1, 500)
         self.vt_max_lookups_input.setValue(15)
@@ -436,6 +493,8 @@ class MainWindow(QMainWindow):
         vt_key_label.setWordWrap(True)
         vt_layout.addWidget(vt_key_label)
         self.vt_api_key_input = QLineEdit()
+        self.vt_api_key_input.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.vt_api_key_input.setMinimumWidth(0)
         self.vt_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.vt_api_key_input.setPlaceholderText("Paste your VirusTotal API key")
         vt_layout.addWidget(self.vt_api_key_input)
@@ -451,7 +510,10 @@ class MainWindow(QMainWindow):
         self.vt_test_status.setObjectName("subheading")
         vt_layout.addWidget(self.vt_test_status)
 
-        self.opt_vt_include_clean = QCheckBox("Also report binaries VirusTotal has seen and NOT flagged")
+        self.opt_vt_include_clean = QCheckBox("Include clean VT results")
+        self.opt_vt_include_clean.setToolTip(
+            "Also report binaries VirusTotal has seen and not flagged"
+        )
         vt_layout.addWidget(self.opt_vt_include_clean)
 
         vt_danger = QWidget()
@@ -459,7 +521,10 @@ class MainWindow(QMainWindow):
         vt_danger_layout = QVBoxLayout(vt_danger)
         vt_danger_layout.setContentsMargins(14, 12, 14, 12)
         vt_danger_layout.setSpacing(8)
-        self.opt_vt_upload = QCheckBox("Upload unknown binaries to VirusTotal for fresh analysis")
+        self.opt_vt_upload = QCheckBox("Upload unknown files")
+        self.opt_vt_upload.setToolTip(
+            "Upload unknown binaries to VirusTotal for fresh analysis"
+        )
         vt_danger_layout.addWidget(self.opt_vt_upload)
         vt_warning = QLabel(
             "⚠ This sends full file content to a third party, not just a hash. Only enable this "
@@ -469,7 +534,10 @@ class MainWindow(QMainWindow):
         vt_warning.setObjectName("dangerWarningText")
         vt_warning.setWordWrap(True)
         vt_danger_layout.addWidget(vt_warning)
-        self.opt_vt_upload_confirm = QCheckBox("I confirm uploading this target's binaries to VirusTotal is authorized")
+        self.opt_vt_upload_confirm = QCheckBox("Authorize VT upload")
+        self.opt_vt_upload_confirm.setToolTip(
+            "I confirm uploading this target's binaries to VirusTotal is authorized"
+        )
         self.opt_vt_upload_confirm.setVisible(False)
         vt_danger_layout.addWidget(self.opt_vt_upload_confirm)
         self.opt_vt_upload.toggled.connect(self.opt_vt_upload_confirm.setVisible)
@@ -481,6 +549,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(vt_group)
         layout.addStretch()
 
+        for checkbox in panel.findChildren(QCheckBox):
+            checkbox.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            checkbox.setMinimumWidth(0)
+
         scroll.setWidget(panel)
 
         # -- Run controls: pinned outside the scroll area -------------------
@@ -490,16 +562,16 @@ class MainWindow(QMainWindow):
         # bottom of the same scrollable content where they could end up
         # just as hidden as the VirusTotal section was.
         footer = QWidget()
-        footer.setObjectName("card")
+        footer.setObjectName("actionFooter")
         footer_layout = QVBoxLayout(footer)
-        footer_layout.setContentsMargins(16, 12, 16, 14)
-        footer_layout.setSpacing(8)
+        footer_layout.setContentsMargins(12, 10, 12, 11)
+        footer_layout.setSpacing(6)
 
         run_row = QHBoxLayout()
-        self.run_btn = QPushButton("▶  Run Scan")
+        self.run_btn = QPushButton("Run scan")
         self.run_btn.setObjectName("primary")
         self.run_btn.clicked.connect(self._start_scan)
-        self.cancel_btn = QPushButton("✕  Cancel")
+        self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setObjectName("danger")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self._cancel_scan)
@@ -508,10 +580,10 @@ class MainWindow(QMainWindow):
         footer_layout.addLayout(run_row)
 
         export_row = QHBoxLayout()
-        self.open_report_btn = QPushButton("↗  Open Report")
+        self.open_report_btn = QPushButton("Open report")
         self.open_report_btn.setEnabled(False)
         self.open_report_btn.clicked.connect(self._open_report)
-        self.export_json_btn = QPushButton("⬇  Export JSON")
+        self.export_json_btn = QPushButton("Export JSON")
         self.export_json_btn.setEnabled(False)
         self.export_json_btn.clicked.connect(self._export_json)
         export_row.addWidget(self.open_report_btn)
@@ -544,53 +616,125 @@ class MainWindow(QMainWindow):
         # just the inner scroll area) so the panel can never render
         # narrower than this regardless of how the splitter negotiates
         # initial space.
-        outer.setMinimumWidth(380)
-        outer.setMaximumWidth(520)
+        outer.setObjectName("configPanel")
+        outer.setMinimumWidth(340)
+        outer.setMaximumWidth(440)
         return outer
 
     def _build_results_panel(self) -> QWidget:
         panel = QWidget()
+        panel.setObjectName("resultsPanel")
+        panel.setMinimumWidth(480)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(18, 16, 18, 12)
+        layout.setSpacing(10)
 
-        # -- Summary pills + filter row --------------------------------
-        top_row = QHBoxLayout()
-        self.summary_label = QLabel("No scan run yet.")
+        results_header = QHBoxLayout()
+        results_title = QLabel("Findings")
+        results_title.setObjectName("resultsTitle")
+        results_header.addWidget(results_title)
+        results_header.addStretch()
+        self.summary_label = QLabel("Ready · no scan run yet")
         self.summary_label.setObjectName("subheading")
-        top_row.addWidget(self.summary_label, stretch=1)
+        self.summary_label.setWordWrap(True)
+        self.summary_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        results_header.addWidget(self.summary_label)
+        layout.addLayout(results_header)
 
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(8)
         self.severity_filter = QComboBox()
+        self.severity_filter.setMinimumWidth(142)
         self.severity_filter.addItems(["All Severities", "Critical", "High", "Medium", "Low", "Info"])
         self.severity_filter.currentTextChanged.connect(self._apply_filter)
-        top_row.addWidget(self.severity_filter)
+        filter_row.addWidget(self.severity_filter)
+
+        self.confidence_filter = QComboBox()
+        self.confidence_filter.setMinimumWidth(142)
+        self.confidence_filter.addItems(["All Confidence", "High", "Medium", "Low"])
+        self.confidence_filter.currentTextChanged.connect(self._apply_filter)
+        filter_row.addWidget(self.confidence_filter)
 
         self.text_filter = QLineEdit()
+        self.text_filter.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.text_filter.setMinimumWidth(0)
         self.text_filter.setPlaceholderText("Filter by title, file, or rule…")
-        self.text_filter.setMaximumWidth(260)
+        self.text_filter.setMinimumWidth(140)
         self.text_filter.textChanged.connect(self._apply_filter)
-        top_row.addWidget(self.text_filter)
-        layout.addLayout(top_row)
+        filter_row.addWidget(self.text_filter, stretch=1)
+        layout.addLayout(filter_row)
 
         # -- Findings table --------------------------------------------
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Severity", "Title", "Affected", "Module", "Top Location"])
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(
+            ["Severity", "Title", "Affected", "Module", "Top Location", "Evidence"]
+        )
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
+        self.table.setColumnWidth(0, 88)
+        self.table.setColumnWidth(2, 76)
+        self.table.setColumnWidth(3, 126)
+        self.table.setColumnWidth(4, 230)
+        self.table.setColumnWidth(1, 260)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(False)
+        self.table.setWordWrap(False)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        self.table.verticalHeader().setDefaultSectionSize(34)
         self.table.doubleClicked.connect(self._open_finding_detail)
-        layout.addWidget(self.table, stretch=3)
+        self.results_stack = QStackedWidget()
+        self.results_stack.addWidget(self.table)
+
+        self.empty_state = QWidget()
+        self.empty_state.setObjectName("emptyState")
+        empty_layout = QVBoxLayout(self.empty_state)
+        empty_layout.setContentsMargins(28, 28, 28, 28)
+        empty_layout.setSpacing(8)
+        empty_layout.addStretch(1)
+        self.empty_eyebrow = QLabel("WARDEN  /  STATIC ANALYSIS")
+        self.empty_eyebrow.setObjectName("emptyEyebrow")
+        self.empty_eyebrow.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        empty_layout.addWidget(self.empty_eyebrow)
+        self.empty_title = QLabel("Ready to analyze")
+        self.empty_title.setObjectName("emptyTitle")
+        self.empty_title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        empty_layout.addWidget(self.empty_title)
+        self.empty_description = QLabel(
+            "Select a file or folder and run a scan to view findings."
+        )
+        self.empty_description.setObjectName("emptyDescription")
+        self.empty_description.setWordWrap(True)
+        self.empty_description.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        empty_layout.addWidget(self.empty_description)
+        self.empty_scope = QLabel("")
+        self.empty_scope.setObjectName("emptyScope")
+        self.empty_scope.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.empty_scope.setWordWrap(True)
+        empty_layout.addWidget(self.empty_scope)
+        empty_layout.addStretch(1)
+        self.results_stack.addWidget(self.empty_state)
+        self.results_stack.setCurrentWidget(self.empty_state)
+        layout.addWidget(self.results_stack, stretch=3)
 
         # -- Log console -----------------------------------------------
         log_label = QLabel("Scan Log")
-        log_label.setObjectName("subheading")
+        log_label.setObjectName("resultsTitle")
+        log_label.setStyleSheet("font-size: 12px;")
         layout.addWidget(log_label)
-        self.log_console = QPlainTextEdit()
+        self.log_console = QTextEdit()
         self.log_console.setReadOnly(True)
-        self.log_console.setMaximumBlockCount(5000)
+        self.log_console.document().setMaximumBlockCount(5000)
+        self.log_console.setPlaceholderText("Scan activity and warnings will appear here.")
+        self.log_console.setMinimumHeight(72)
         layout.addWidget(self.log_console, stretch=1)
 
         return panel
@@ -747,6 +891,7 @@ class MainWindow(QMainWindow):
             logger.error("Failed to start scan: %s\n%s", e, traceback.format_exc())
             self._append_log(f"Failed to start scan: {e}", "error")
             self._scan_ui_reset()
+            self._set_results_state("failed", detail=str(e))
 
     def _update_vt_eta_label(self) -> None:
         # Free-tier VirusTotal is 1 lookup per ~15s — shown as a worst-case
@@ -801,10 +946,11 @@ class MainWindow(QMainWindow):
     def _reset_run_ui(self) -> None:
         self.table.setRowCount(0)
         self.log_console.clear()
-        self.summary_label.setText("Running…")
+        self._last_findings = []
         self.open_report_btn.setEnabled(False)
         self.export_json_btn.setEnabled(False)
         self._current_result = None
+        self._set_results_state("scanning")
 
     def _tick_elapsed(self) -> None:
         self._elapsed_seconds += 1
@@ -818,7 +964,10 @@ class MainWindow(QMainWindow):
         self._elapsed_timer.stop()
 
     def _on_progress(self, files_scanned: int, current_path: str) -> None:
+        self._results_state = "scanning"
         self.status_files_label.setText(f"{files_scanned} files scanned")
+        self.status_state_label.setText("Scanning")
+        self.summary_label.setText(f"Scanning · {files_scanned} files inspected")
 
     def _on_log_line(self, message: str, level: str) -> None:
         self._append_log(message, level)
@@ -828,13 +977,13 @@ class MainWindow(QMainWindow):
         colors = {"dim": palette["MUTED"], "warn": palette["AMBER"], "error": palette["RED"], "ok": palette["GREEN"]}
         color = colors.get(level, palette["TEXT"])
         ts = datetime.now().strftime("%H:%M:%S")
-        # appendHtml() renders its argument as rich text, and log messages
+        # append() renders its argument as rich text, and log messages
         # routinely embed attacker-controlled data (filenames, paths, raw
         # exception text) pulled straight from the scanned target — escape
         # it the same way the HTML report does, so a crafted filename like
         # `<img src=...>.exe` can't inject markup into the log pane.
         safe_message = html.escape(message)
-        self.log_console.appendHtml(
+        self.log_console.append(
             f'<span style="color:{palette["MUTED"]}">{ts}</span> '
             f'<span style="color:{color}">{safe_message}</span>'
         )
@@ -842,15 +991,18 @@ class MainWindow(QMainWindow):
     def _on_finished(self, result) -> None:
         self._scan_ui_reset()
         if result is None:
-            self.summary_label.setText("Scan cancelled.")
+            self._set_results_state("cancelled")
             return
 
         self._current_result = result
-        self._populate_table(result.findings)
-        counts = result.summary_counts()
-        self.summary_label.setText(
-            "  ·  ".join(f"{k}: {v}" for k, v in counts.items())
-        )
+        self._populate_table(result.findings, result.metadata.target_path)
+        self.status_files_label.setText(f"{result.metadata.files_scanned} files scanned")
+        self.summary_label.setText(self._format_scan_summary(result))
+        self.summary_label.setToolTip(self._format_scan_summary_detail(result))
+        if result.findings:
+            self._set_results_state("results")
+        else:
+            self._set_results_state("complete", result=result)
 
         try:
             self._write_reports(result)
@@ -860,10 +1012,100 @@ class MainWindow(QMainWindow):
             logger.error("Failed to write reports: %s\n%s", e, traceback.format_exc())
             self._append_log(f"Failed to write report files: {e}", "error")
 
+    @staticmethod
+    def _format_scan_summary(result) -> str:
+        counts = result.summary_counts()
+        unique = counts.get("unique", {})
+        info_unique = counts.get("info_unique", {})
+        group_count = sum(unique.values()) + sum(info_unique.values())
+        instance_count = sum(counts.get("instances", {}).values()) + sum(
+            counts.get("info_instances", {}).values()
+        )
+        return (
+            f"{group_count} grouped issue{'s' if group_count != 1 else ''}"
+            f"  ·  {instance_count} occurrence{'s' if instance_count != 1 else ''}"
+        )
+
+    @staticmethod
+    def _format_scan_summary_detail(result) -> str:
+        counts = result.summary_counts()
+        severity_counts = dict(counts.get("unique", {}))
+        severity_counts.update(counts.get("info_unique", {}))
+        breakdown = " · ".join(
+            f"{severity}: {count}"
+            for severity, count in severity_counts.items()
+            if count
+        )
+        return f"Unique grouped issues by severity: {breakdown}" if breakdown else "No findings."
+
     def _on_failed(self, message: str) -> None:
         self._scan_ui_reset()
-        self.summary_label.setText("Scan failed.")
+        self._set_results_state("failed", detail=message)
         QMessageBox.critical(self, "Scan failed", message)
+
+    def _set_results_state(self, state: str, result=None, detail: str = "") -> None:
+        """Keep the results workspace explicit about idle and terminal scan states."""
+        self._results_state = state
+        self.results_stack.setCurrentWidget(self.empty_state)
+        self.empty_scope.clear()
+
+        if state == "ready":
+            self.status_state_label.setText("Ready")
+            self.summary_label.setText("Ready · no scan run yet")
+            self.empty_eyebrow.setText("WARDEN  /  STATIC ANALYSIS")
+            self.empty_title.setText("Ready to analyze")
+            self.empty_description.setText(
+                "Select a file or folder and run a scan to view findings."
+            )
+            return
+
+        if state == "scanning":
+            self.status_state_label.setText("Scanning")
+            self.summary_label.setText("Scanning…")
+            self.empty_eyebrow.setText("ANALYSIS IN PROGRESS")
+            self.empty_title.setText("Inspecting selected files")
+            self.empty_description.setText(
+                "Warden is performing static analysis. Findings will appear here when the scan completes."
+            )
+            return
+
+        if state == "cancelled":
+            self.status_state_label.setText("Cancelled")
+            self.summary_label.setText("Scan cancelled")
+            self.empty_eyebrow.setText("SCAN CANCELLED")
+            self.empty_title.setText("Analysis stopped")
+            self.empty_description.setText(
+                "No completed result set is available. Adjust the target or options and run another scan."
+            )
+            return
+
+        if state == "failed":
+            self.status_state_label.setText("Failed")
+            self.summary_label.setText("Scan failed")
+            self.empty_eyebrow.setText("SCAN FAILED")
+            self.empty_title.setText("Analysis could not complete")
+            self.empty_description.setText(detail or "Review the error and scan log, then try again.")
+            return
+
+        if state == "complete":
+            metadata = result.metadata
+            count = metadata.files_scanned
+            target_name = Path(metadata.target_path).name or metadata.target_path
+            self.status_state_label.setText("Complete")
+            self.empty_eyebrow.setText("SCAN COMPLETE")
+            self.empty_title.setText("No findings reported")
+            self.empty_description.setText(
+                "No findings were reported for the analyzed files. Review the scan log for skipped "
+                "files, module warnings, and coverage limitations."
+            )
+            self.empty_scope.setText(
+                f"{count} file{'s' if count != 1 else ''} analyzed  ·  {target_name}"
+            )
+            return
+
+        if state == "results":
+            self.status_state_label.setText("Complete")
+            self.results_stack.setCurrentWidget(self.table)
 
     # ------------------------------------------------------------------
     # Reports
@@ -898,11 +1140,16 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Findings table
     # ------------------------------------------------------------------
-    def _populate_table(self, findings: list[Finding]) -> None:
+    def _populate_table(self, findings: list[Finding], target_path: str | None = None) -> None:
         self._last_findings = findings
-        grouped = group_findings(findings)
+        root = str(scan_root(target_path)) if target_path else None
+        grouped = group_findings(findings, scan_root=root)
         self.table.setRowCount(0)
         self.table.setRowCount(len(grouped))
+        if grouped:
+            self.results_stack.setCurrentWidget(self.table)
+        else:
+            self.results_stack.setCurrentWidget(self.empty_state)
         for row, f in enumerate(grouped):
             sev_item = QTableWidgetItem(f["severity"])
             color = QColor(SEVERITY_COLORS.get(f["severity"], "#8b8f96"))
@@ -912,37 +1159,90 @@ class MainWindow(QMainWindow):
             title = f["title"]
             affected = int(f.get("affected_count") or len(f.get("locations", [])) or 1)
             if affected > 1:
-                title = f"{title} ({affected} locations)"
+                title = f"{title} ({affected} occurrences)"
             title_item = QTableWidgetItem(title)
             affected_item = QTableWidgetItem(str(affected))
             module_item = QTableWidgetItem(f["module"])
             top_location = (f.get("locations") or [f.get("file_path", "")])[0]
             file_item = QTableWidgetItem(top_location)
+            occurrences = f.get("occurrences") or [f]
+            evidence_values = [
+                str(occurrence.get("evidence", ""))
+                for occurrence in occurrences
+                if occurrence.get("evidence")
+            ]
+            evidence_preview = " ".join(evidence_values[0].split()) if evidence_values else ""
+            if affected > 1:
+                evidence_preview += f" (+{affected - 1} more)"
+            evidence_item = QTableWidgetItem(evidence_preview)
+            evidence_details = []
+            for occurrence in occurrences:
+                location = occurrence.get("file_path") or occurrence.get("location", "")
+                if occurrence.get("offset") is not None:
+                    location += f" (offset 0x{occurrence['offset']:X})"
+                elif occurrence.get("line_number"):
+                    location += f" (line {occurrence['line_number']}"
+                    if occurrence.get("column_number") is not None:
+                        location += f", column {occurrence['column_number']}"
+                    location += ")"
+                evidence_details.append(
+                    f"{location} [{occurrence.get('confidence', 'Medium')}]: "
+                    f"{occurrence.get('evidence', '')}"
+                )
+                context = occurrence.get("context") or (occurrence.get("extra") or {}).get("context")
+                if context:
+                    evidence_details.append(f"Context: {context}")
+            evidence_item.setToolTip("\n\n".join(evidence_details))
+            title_item.setToolTip(f["title"])
+            affected_item.setToolTip(
+                f"{affected} distinct occurrence{'s' if affected != 1 else ''}"
+            )
+            file_item.setToolTip(top_location)
 
             self.table.setItem(row, 0, sev_item)
             self.table.setItem(row, 1, title_item)
             self.table.setItem(row, 2, affected_item)
             self.table.setItem(row, 3, module_item)
             self.table.setItem(row, 4, file_item)
-
-        self.table.resizeRowsToContents()
+            self.table.setItem(row, 5, evidence_item)
+            sev_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            affected_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            module_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setRowHeight(row, 34)
 
     def _apply_filter(self) -> None:
         severity = self.severity_filter.currentText()
+        confidence = self.confidence_filter.currentText()
         text = self.text_filter.text().strip().lower()
         for row in range(self.table.rowCount()):
             sev_item = self.table.item(row, 0)
             title_item = self.table.item(row, 1)
             file_item = self.table.item(row, 4)
+            evidence_item = self.table.item(row, 5)
             if sev_item is None:
                 continue
             severity_match = severity == "All Severities" or sev_item.text() == severity
+            finding = sev_item.data(Qt.ItemDataRole.UserRole) or {}
+            occurrences = finding.get("occurrences") or [finding]
+            confidence_match = confidence == "All Confidence" or any(
+                occurrence.get("confidence") == confidence for occurrence in occurrences
+            )
+            occurrence_text = " ".join(
+                " ".join(
+                    str(occurrence.get(field, ""))
+                    for field in ("file_path", "rule_id", "title", "location")
+                )
+                for occurrence in occurrences
+            ).lower()
             text_match = (
                 not text
                 or text in title_item.text().lower()
                 or text in file_item.text().lower()
+                or text in str(finding.get("rule_id", "")).lower()
+                or text in occurrence_text
+                or text in evidence_item.text().lower()
             )
-            self.table.setRowHidden(row, not (severity_match and text_match))
+            self.table.setRowHidden(row, not (severity_match and confidence_match and text_match))
 
     def _open_finding_detail(self) -> None:
         row = self.table.currentRow()

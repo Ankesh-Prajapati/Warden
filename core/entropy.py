@@ -98,16 +98,13 @@ def find_high_entropy_candidates(
     """
     Scan text for high-entropy substrings.
 
-    Returns list of (matched_string, start_offset) tuples. Deduplicates
-    identical matches to avoid report noise on repeated tokens.
+    Returns every (matched_string, start_offset) tuple so repeated values at
+    different source locations remain independently traceable.
     """
-    seen: set[str] = set()
     results: list[tuple[str, int]] = []
 
     for m in _CANDIDATE_RE.finditer(text):
         candidate = m.group(0)
-        if candidate in seen:
-            continue
         # Skip obvious non-secrets: repeated-char runs, all-digit sequences
         # (often just numeric IDs), and standard GUID/UUID shapes.
         if len(set(candidate)) <= 2:
@@ -119,7 +116,6 @@ def find_high_entropy_candidates(
         if _looks_like_encoded_binary_blob(candidate):
             continue
         if is_high_entropy(candidate, b64_threshold, hex_threshold):
-            seen.add(candidate)
             results.append((candidate, m.start()))
 
     return results

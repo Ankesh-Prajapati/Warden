@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import base64
 import html
+from datetime import datetime
 from pathlib import Path
 
 from core.finding_grouping import group_finding_dicts
+from core.path_utils import normalize_target_path
 from core.scanner import ScanResult
 
 SEVERITY_ORDER = ["Critical", "High", "Medium", "Low", "Info"]
@@ -209,7 +211,7 @@ header h1 {
 header .subtitle { color: var(--muted); font-size: 13px; margin-top: 4px; }
 .meta-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 1px;
   margin-top: 22px;
   background: var(--border-soft);
@@ -223,7 +225,8 @@ header .subtitle { color: var(--muted); font-size: 13px; margin-top: 4px; }
   letter-spacing: 0.9px; margin-bottom: 5px;
 }
 .meta-item .meta-value {
-  color: var(--text); font-size: 13px; font-weight: 600; word-break: break-word;
+  color: var(--text); font-size: 13px; font-weight: 600; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 .meta-item .meta-value.mono { font-family: 'SF Mono', 'Consolas', 'Fira Code', monospace; font-size: 12px; font-weight: 500; color: var(--text-secondary); }
@@ -311,6 +314,8 @@ header .subtitle { color: var(--muted); font-size: 13px; margin-top: 4px; }
 
 /* ---------- Severity summary cards ---------- */
 .summary { display: flex; gap: 14px; margin-bottom: 26px; flex-wrap: wrap; }
+.section-subtitle { color: var(--muted); font-size: 12px; margin: -14px 0 10px; }
+.section-subtitle span { margin-left: 8px; opacity: .8; }
 .summary-card {
   position: relative;
   background: linear-gradient(180deg, var(--panel-elevated), var(--panel));
@@ -331,6 +336,9 @@ header .subtitle { color: var(--muted); font-size: 13px; margin-top: 4px; }
 .summary-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), var(--shadow-card-hover); }
 .summary-card .count { font-size: 28px; font-weight: 800; line-height: 1; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; }
 .summary-card .label { color: var(--muted); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.1px; margin-top: 8px; }
+.summary-card .detail { color: var(--muted); font-size: 11px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.summary-severity .summary-card { min-width: 104px; }
+.summary-severity .summary-card .card-body { padding: 12px 15px 14px; }
 
 /* ---------- Toolbar ---------- */
 .toolbar {
@@ -618,33 +626,76 @@ def _esc(value) -> str:
     return html.escape(str(value)) if value is not None else ""
 
 
+def _format_timestamp(value: str | None) -> str:
+    if not value:
+        return "—"
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    display = parsed.strftime("%d %b %Y, %H:%M:%S")
+    timezone_name = parsed.tzname()
+    return f"{display} {timezone_name}" if timezone_name else display
+
+
 def _render_summary(counts: dict) -> str:
-    cards = []
-    for sev, count in counts.items():
+    unique = counts.get("unique", {})
+    instances = counts.get("instances", {})
+    info_unique = sum(counts.get("info_unique", {}).values())
+    info_instances = sum(counts.get("info_instances", {}).values())
+    total_unique = sum(unique.values()) + info_unique
+    total_instances = sum(instances.values()) + info_instances
+    totals = (
+        ("Unique issues", total_unique, "All grouped findings, including informational issues."),
+        ("Finding instances", total_instances, "All occurrences, including informational findings."),
+        ("Informational issues", info_unique, "Unique inventory and review indicators."),
+        ("Informational instances", info_instances, "Occurrence count for informational indicators."),
+    )
+    total_cards = "".join(
+        f'<div class="summary-card summary-total"><div class="card-accent" '
+        f'style="background:linear-gradient(90deg, var(--accent), var(--accent-soft));"></div>'
+        f'<div class="card-body"><div class="count">{count}</div>'
+        f'<div class="label">{_esc(label)}</div><div class="detail">{_esc(detail)}</div></div></div>'
+        for label, count, detail in totals
+    )
+    severity_cards = []
+    for sev in SEVERITY_ORDER:
+        if sev == "Info":
+            continue
+        count = unique.get(sev, 0)
+        instance_count = instances.get(sev, 0)
         color = SEVERITY_COLORS.get(sev, "#8b8f96")
         gradient = _severity_gradient(sev)
-        cards.append(
+        severity_cards.append(
             f'<div class="summary-card" '
             f'onclick="filterBySeverity(\'{sev}\', this)">'
             f'<div class="card-accent" style="background:{gradient};"></div>'
             f'<div class="card-body">'
             f'<div class="count" style="color:{color}">{count}</div>'
-            f'<div class="label">{_esc(sev)}</div></div></div>'
+            f'<div class="label">{_esc(sev)} issues</div>'
+            f'<div class="detail">{instance_count} instance{"s" if instance_count != 1 else ""}</div></div></div>'
         )
-    return f'<div class="summary">{"".join(cards)}</div>'
+    return (
+        f'<div class="summary summary-overview">{total_cards}</div>'
+        '<div class="section-subtitle">Unique vulnerability issues by severity'
+        '<span>Instance counts are shown beneath each severity.</span></div>'
+        f'<div class="summary summary-severity">{"".join(severity_cards)}</div>'
+    )
 
 
 def _render_risk_banner(counts: dict) -> str:
-    if counts.get("Critical"):
+    # Use the 'instances' count for vulnerability severities (exclude Info)
+    vuln_instances = counts.get('instances', {})
+    if vuln_instances.get("Critical"):
         level, icon, color, bg = "Critical Risk", "\u26A0", "#d9695f", "#2e1f1c"
-        sub = f"{counts['Critical']} critical finding(s) require immediate remediation before release."
-    elif counts.get("High"):
+        sub = f"{vuln_instances['Critical']} critical finding(s) require immediate remediation before release."
+    elif vuln_instances.get("High"):
         level, icon, color, bg = "High Risk", "\u26A0", "#dd9457", "#2e2419"
-        sub = f"{counts['High']} high-severity finding(s) should be remediated before release."
-    elif counts.get("Medium"):
+        sub = f"{vuln_instances['High']} high-severity finding(s) should be remediated before release."
+    elif vuln_instances.get("Medium"):
         level, icon, color, bg = "Moderate Risk", "\u25CF", "#d8bd66", "#2a2819"
-        sub = f"{counts['Medium']} medium-severity finding(s) identified \u2014 review recommended."
-    elif counts.get("Low"):
+        sub = f"{vuln_instances['Medium']} medium-severity finding(s) identified \u2014 review recommended."
+    elif vuln_instances.get("Low"):
         level, icon, color, bg = "Low Risk", "\u25CF", "#8aa6bd", "#1c2429"
         sub = "Only low-severity findings identified \u2014 no urgent action required."
     else:
@@ -671,14 +722,31 @@ def _render_dashboard(findings: list[dict], counts: dict) -> str:
     attack_tags = sorted({t for f in findings for t in f.get("tags", []) if t in {
         "credential", "database", "auto-update", "signature", "dependency-graph", "named-pipe", "registry-key", "url"
     }})
+    # Use instances count for heatmap (vulnerabilities only)
+    vuln_instances = counts.get('instances', {})
     heat_cells = "".join(
         f'<div class="heat-cell" style="background:{_severity_gradient(sev)}">'
-        f'<span class="heat-label">{_esc(sev)}</span><span class="heat-count">{_esc(count)}</span></div>'
-        for sev, count in counts.items()
+        f'<span class="heat-label">{_esc(sev)}</span><span class="heat-count">{_esc(vuln_instances.get(sev, 0))}</span></div>'
+        for sev in SEVERITY_ORDER if sev != "Info"
     )
+    # Calculate highest active severity from vuln_instances
+    highest_sev = "None"
+    for sev in SEVERITY_ORDER:
+        if sev == "Info":
+            continue
+        if vuln_instances.get(sev, 0) > 0:
+            highest_sev = sev
+            break
+
+    vuln_unique = sum(counts.get("unique", {}).values())
+    vuln_instances = sum(counts.get("instances", {}).values())
+    info_unique = sum(counts.get("info_unique", {}).values())
+    info_instances = sum(counts.get("info_instances", {}).values())
+    unique_total = vuln_unique + info_unique
+    instance_total = vuln_instances + info_instances
     return f"""<div class="section-title">Assessment Overview</div>
 <div class="dashboard-grid">
-  <div class="dash-panel"><h2>Executive Summary</h2><div>{len(findings)} grouped finding(s). Highest active severity: {_esc(next((s for s, c in counts.items() if c), "None"))}.</div></div>
+  <div class="dash-panel"><h2>Executive Summary</h2><div>{unique_total} total unique issue(s), including {vuln_unique} vulnerability issue(s) and {info_unique} informational issue(s), across {instance_total} finding instance(s), including {vuln_instances} vulnerability and {info_instances} informational instance(s). Highest active severity: {_esc(highest_sev)}.</div></div>
   <div class="dash-panel"><h2>Risk Heatmap</h2><div class="heatmap">{heat_cells}</div></div>
   <div class="dash-panel"><h2>Attack Surface</h2><div>{_esc(", ".join(attack_tags[:12]) or "No notable attack-surface tags detected.")}</div></div>
   <div class="dash-panel"><h2>MITRE ATT&CK</h2><div>{_esc(", ".join(mitre[:10]) or "No mapping available for current tags.")}</div></div>
@@ -705,14 +773,16 @@ def _render_finding(f: dict, idx: int) -> str:
     tags_html = "".join(f"<span>{_esc(t)}</span>" for t in f.get("tags", []))
     mitre_html = ", ".join(_mapped_values(f, MITRE_BY_TAG))
     cwe_html = ", ".join(_mapped_values(f, CWE_BY_TAG))
+    occurrences = f.get("occurrences", [])
     locations = f.get("locations", [f["file_path"]])
     contexts = f.get("contexts", [])
-    affected_badge = f'<span class="affected-count">{len(locations)} affected file{"s" if len(locations) != 1 else ""}</span>'
+    affected = len(occurrences) or len(locations)
+    affected_badge = f'<span class="affected-count">{affected} affected occurrence{"s" if affected != 1 else ""}</span>'
 
     if len(locations) > 3:
         preview = "".join(f"<li>{_esc(loc)}</li>" for loc in locations)
         files_html = f"""<details class="files-details">
-      <summary>Show {len(locations)} affected files</summary>
+      <summary>Show {len(locations)} affected occurrences</summary>
       <ul class="file-list">{preview}</ul>
     </details>"""
     else:
@@ -722,7 +792,11 @@ def _render_finding(f: dict, idx: int) -> str:
     # numbered) for each affected location that has one — this is what lets
     # an analyst pinpoint the exact spot in the file instead of just seeing
     # the bare matched string in isolation.
-    context_entries = [(loc, ctx) for loc, ctx in zip(locations, contexts) if ctx]
+    context_entries = [
+        (occurrence.get("location", locations[index] if index < len(locations) else ""), occurrence.get("context", ""))
+        for index, occurrence in enumerate(occurrences)
+        if occurrence.get("context")
+    ] if occurrences else [(loc, ctx) for loc, ctx in zip(locations, contexts) if ctx]
     context_html = ""
     if context_entries:
         shown = context_entries[:3]
@@ -742,7 +816,19 @@ def _render_finding(f: dict, idx: int) -> str:
     {blocks}{more_note}
   </div>"""
 
-    search_blob = _esc(" ".join([f["title"], f["rule_id"], f["module"]] + [l for l in locations[:50]])).lower()
+    searchable_evidence = [str(f.get("evidence", ""))]
+    searchable_poc = [str(f.get("poc", ""))]
+    searchable_context = [str(context) for context in contexts]
+    for occurrence in occurrences:
+        searchable_evidence.append(str(occurrence.get("evidence", "")))
+        searchable_context.append(str(occurrence.get("context", "")))
+    search_blob = _esc(" ".join(
+        [f["title"], f["rule_id"], f["module"]]
+        + locations[:50]
+        + searchable_evidence
+        + searchable_poc
+        + searchable_context
+    )).lower()
 
     poc_html = ""
     if f.get("poc"):
@@ -757,6 +843,27 @@ def _render_finding(f: dict, idx: int) -> str:
     <pre class="poc">{_esc(f['poc'])}</pre>
   </div>"""
 
+    occurrences_html = ""
+    if occurrences:
+        occurrence_entries = []
+        for occurrence in occurrences:
+            detail = [
+                f"<strong>{_esc(occurrence.get('location', occurrence.get('file_path', '')))}</strong>",
+                f"Confidence: {_esc(occurrence.get('confidence', 'Medium'))}",
+                f"Evidence: {_esc(occurrence.get('evidence', ''))}",
+            ]
+            context = occurrence.get("context")
+            if context:
+                detail.append(f"<pre class='evidence-box'>{_esc(context)}</pre>")
+            occurrence_poc = occurrence.get("poc")
+            if occurrence_poc:
+                detail.append(f"<pre class='poc'>{_esc(occurrence_poc)}</pre>")
+            occurrence_entries.append("<li>" + "<br>".join(detail) + "</li>")
+        occurrences_html = (
+            '<div class="finding-section"><div class="label">Occurrences</div>'
+            f"<ol>{''.join(occurrence_entries)}</ol></div>"
+        )
+
     return f"""
 <div class="finding {conf_class}" id="finding-{idx}" style="--finding-accent:{gradient};" data-severity="{_esc(f['severity'])}" data-search="{search_blob}">
   <div class="finding-header">
@@ -768,13 +875,14 @@ def _render_finding(f: dict, idx: int) -> str:
     rule: {_esc(f['rule_id'])} &middot; confidence: {_esc(f['confidence'])}{' &middot; MITRE: ' + _esc(mitre_html) if mitre_html else ''}{' &middot; CWE: ' + _esc(cwe_html) if cwe_html else ''}
   </div>
   <div class="finding-section">
-    <div class="label">Affected Files</div>
+    <div class="label">Affected Occurrences</div>
     {files_html}
   </div>
   <div class="finding-section">
     <div class="label">Evidence</div>
     <div class="evidence-box">{_esc(f['evidence'])}</div>
   </div>
+  {occurrences_html}
   {context_html}
   <div class="finding-section">
     <div class="label">Description</div>
@@ -811,11 +919,28 @@ def _render_module_section(module: str, findings: list[dict], start_idx: int, op
 </details>"""
 
 
-def generate_html_report(result: ScanResult, output_path: str | Path) -> Path:
-    """Render `result` to a self-contained HTML file at `output_path`."""
-    findings = _group_findings([f.to_dict() for f in result.sorted_findings()])
+def generate_html_report(
+    result: ScanResult,
+    output_path: str | Path,
+) -> Path:
+    """Render a self-contained report with complete local scan evidence."""
+    report_data = result.to_dict()
+    findings = report_data["findings"]
     meta = result.metadata
-    counts = result.summary_counts()
+    counts = report_data["summary"]
+    module_run_summary = ", ".join(
+        (
+            f"{name}: {count} "
+            f"(input {meta.module_input_execution_counts.get(name, 0)}, "
+            f"extracted {meta.module_extracted_execution_counts.get(name, 0)})"
+            if meta.module_input_execution_counts or meta.module_extracted_execution_counts
+            else f"{name}: {count}"
+        )
+        for name, count in sorted(meta.module_execution_counts.items())
+    ) or "None"
+    finding_instances = sum(
+        len(finding["occurrences"]) for finding in findings
+    )
 
     by_module: dict[str, list[dict]] = {}
     module_order: list[str] = []
@@ -849,6 +974,10 @@ def generate_html_report(result: ScanResult, output_path: str | Path) -> Path:
     if not body_html:
         body_html = '<div class="empty-state">No findings detected by the modules run in this scan.</div>'
 
+    output_path = Path(output_path)
+    started_display = _format_timestamp(meta.started_at)
+    finished_display = _format_timestamp(meta.finished_at)
+    target_display = normalize_target_path(meta.target_path)
     doc = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -865,11 +994,15 @@ def generate_html_report(result: ScanResult, output_path: str | Path) -> Path:
   </div>
   <div class="subtitle">Static security analysis for thick-client applications</div>
   <div class="meta-grid">
-    <div class="meta-item"><div class="meta-label">Target</div><div class="meta-value mono">{_esc(meta.target_path)}</div></div>
-    <div class="meta-item"><div class="meta-label">Scan Started</div><div class="meta-value">{_esc(meta.started_at)}</div></div>
-    <div class="meta-item"><div class="meta-label">Scan Finished</div><div class="meta-value">{_esc(meta.finished_at)}</div></div>
-    <div class="meta-item"><div class="meta-label">Files Scanned</div><div class="meta-value">{_esc(meta.files_scanned)}</div></div>
-    <div class="meta-item"><div class="meta-label">Grouped Findings</div><div class="meta-value">{len(findings)}</div></div>
+    <div class="meta-item"><div class="meta-label">Target</div><div class="meta-value mono" title="{_esc(target_display)}">{_esc(target_display)}</div></div>
+    <div class="meta-item timestamp"><div class="meta-label">Scan Started</div><div class="meta-value" title="{_esc(meta.started_at)}"><time datetime="{_esc(meta.started_at)}">{_esc(started_display)}</time></div></div>
+    <div class="meta-item timestamp"><div class="meta-label">Scan Finished</div><div class="meta-value" title="{_esc(meta.finished_at)}"><time datetime="{_esc(meta.finished_at)}">{_esc(finished_display)}</time></div></div>
+    <div class="meta-item"><div class="meta-label">Files Scanned (Unique)</div><div class="meta-value">{_esc(meta.files_scanned)}</div></div>
+    <div class="meta-item"><div class="meta-label">Input Files</div><div class="meta-value">{_esc(meta.input_files_scanned)}</div></div>
+    <div class="meta-item"><div class="meta-label">Extracted Files</div><div class="meta-value">{_esc(meta.extracted_files_scanned)}</div></div>
+    <div class="meta-item"><div class="meta-label">Module Executions (Input / Extracted)</div><div class="meta-value">{_esc(module_run_summary)}</div></div>
+    <div class="meta-item"><div class="meta-label">Grouped Issues</div><div class="meta-value">{len(findings)}</div></div>
+    <div class="meta-item"><div class="meta-label">Finding Instances</div><div class="meta-value">{finding_instances}</div></div>
     <div class="meta-item"><div class="meta-label">Tool Version</div><div class="meta-value">{_esc(meta.tool_version)}</div></div>
   </div>
 </header>
@@ -894,6 +1027,6 @@ def generate_html_report(result: ScanResult, output_path: str | Path) -> Path:
 </body>
 </html>
 """
-    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(doc, encoding="utf-8")
     return output_path

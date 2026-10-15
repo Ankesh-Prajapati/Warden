@@ -184,6 +184,8 @@ The desktop app supports:
 - Filterable, grouped findings table.
 - Double-click finding details with evidence, context, remediation, and PoC.
 - HTML and JSON reports written to the application-local `reports/` folder.
+- The findings table, detail view, HTML report, and JSON export display complete
+  extracted evidence by default. Treat local reports as potentially sensitive.
 
 > **Note:** Desktop settings are persisted through Qt settings storage. The
 > VirusTotal API key is stored the same way as other desktop settings; for
@@ -395,6 +397,21 @@ reports/
 
 CLI reports are written to the path passed with `--output`.
 
+Scan metadata uses these definitions:
+
+- `files_scanned` is the number of unique file paths processed by one or more
+  selected analysis modules, counting each path once even when several modules
+  inspect it.
+- `input_files_scanned` counts unique files from the original target;
+  `extracted_files_scanned` counts unique files processed from extracted
+  archives. Their sum equals `files_scanned`.
+- `module_execution_counts` records total module invocations separately from
+  file counts. `module_input_execution_counts` and
+  `module_extracted_execution_counts` show which passes caused those calls;
+  archive-content passes can invoke the same module more than once.
+- `finding_groups` counts grouped issues (the report's top-level rows), while
+  `finding_instances` counts their individual source occurrences.
+
 The report includes:
 
 - Executive dashboard.
@@ -406,6 +423,19 @@ The report includes:
 - Remediation guidance.
 - Grouped/deduplicated findings.
 - Detailed evidence and reproduction steps.
+
+The desktop finding details, HTML reports, JSON reports, and CLI outputs
+include the complete extracted evidence by default. These artifacts may contain
+credentials, tokens, or proprietary indicators; keep them local and share only
+with explicit authorization. Warden does not transmit local evidence or scanned
+file contents when generating reports. Optional VirusTotal lookups remain
+separate; file uploads require their existing explicit opt-in. Finding paths
+are relative to the scan root, and archive members use logical
+`archive > member` paths.
+
+```powershell
+PS> python cli.py scan .\target --module secrets --output build\local-report.html --json build\local-report.json
+```
 
 <h2 id="project-structure" align="center">Project Structure</h2>
 
@@ -439,6 +469,8 @@ Warden/
     theme.py
   report/
     html_export.py
+  tests/
+    test_scanner_entrypoints.py
   rules/
     secrets_patterns.yaml
     system_dlls.yaml
@@ -450,6 +482,15 @@ Warden/
 
 Both interfaces call `core.scanner.run_scan()`. Module output is normalized
 into `core.models.Finding` and rendered by `report.html_export`.
+
+<h3 id="testing" align="center">Testing</h3>
+
+Keep automated tests under `tests/` rather than adding test scripts to the
+repository root. Run the suite from the repository root with:
+
+```powershell
+PS> python -m pytest -q tests
+```
 
 <h2 id="known-limitations" align="center">Known Limitations</h2>
 
@@ -471,6 +512,7 @@ Before packaging or pushing:
 ```powershell
 PS> python -m compileall .
 PS> python cli.py --help
+PS> python -m pytest -q tests
 ```
 
 Keep generated files out of source control:

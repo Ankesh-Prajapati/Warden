@@ -1,15 +1,13 @@
 # Warden — Known Windows System DLL Reference
 #
-# Used by Module 2 (DLL Hijacking Detection) to distinguish imports that
-# would normally resolve from a real Windows System32 directory (safe,
-# not plantable by a local attacker) from imports that resolve to
-# neither System32 nor the application's own directory — a strong
-# signal of a missing/phantom DLL that could be planted for hijacking.
+# Used by Module 2 (DLL Hijacking Detection) as a conservative reference
+# for common Windows system imports. It is not a complete target-OS
+# inventory and does not establish actual loader resolution or hijackability.
 #
 # This list is intentionally conservative (common, well-known system
 # DLLs across modern Windows versions). It is not exhaustive; unusual
 # but legitimate system DLLs may be flagged as "unknown" rather than
-# confidently "system" or "phantom" — see confidence handling in
+# confidently "system" or "bundled" — see confidence handling in
 # dll_hijack_module.py.
 
 known_system_dlls:
@@ -36,6 +34,9 @@ known_system_dlls:
   - secur32.dll
   - sspicli.dll
   - ntdll.dll
+  # Windows Restart Manager API (Rstrtmgr.dll):
+  # https://learn.microsoft.com/windows/win32/rstmgr/restart-manager-portal
+  - rstrtmgr.dll
   - msvcrt.dll
   - msvcp140.dll
   - vcruntime140.dll
@@ -46,6 +47,39 @@ known_system_dlls:
   - api-ms-win-crt-string-l1-1-0.dll
   - api-ms-win-crt-stdio-l1-1-0.dll
   - api-ms-win-core-synch-l1-2-0.dll
+  # Additional API-set contracts to prevent false phantom DLL positives
+  - api-ms-win-core-*
+  - api-ms-win-crt-*
+  - api-ms-win-security-*
+  - api-ms-win-core-registry-*
+  - api-ms-win-core-synch-*
+  - api-ms-win-core-file-*
+  - api-ms-win-core-processthreads-*
+  - api-ms-win-core-profile-*
+  - api-ms-win-core-sysinfo-*
+  - api-ms-win-core-timezone-*
+  - api-ms-win-core-console-*
+  - api-ms-win-core-string-*
+  - api-ms-win-core-inputlid-*
+  - api-ms-win-core-delayload-*
+  - api-ms-win-core-errorhandling-*
+  - api-ms-win-core-interlocked-*
+  - api-ms-win-core-libraryloader-*
+  - api-ms-win-core-localization-*
+  - api-ms-win-core-memory-*
+  - api-ms-win-core-namedpipe-*
+  - api-ms-win-core-path-*
+  - api-ms-win-core-processenvironment-*
+  - api-ms-win-core-processthreads-*
+  - api-ms-win-core-profile-*
+  - api-ms-win-core-rtlsupport-*
+  - api-ms-win-core-sidebyside-*
+  - api-ms-win-core-string-*
+  - api-ms-win-core-synch-*
+  - api-ms-win-core-sysinfo-*
+  - api-ms-win-core-timezone-*
+  - api-ms-win-core-util-*
+  - ext-ms-*
   - setupapi.dll
   - winmm.dll
   - winspool.drv
@@ -136,4 +170,3 @@ known_system_dlls:
   - msjint40.dll
   - dao350.dll
   - dao360.dll
-

@@ -1,2 +1,23 @@
-*.pyc
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.pyre/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Local tool state and generated output
 .claude/settings.local.json
+build/
+reports/
+logs/
+*.log
+*.tmp
+*.bak
+
+# Keep source assets and reusable rule packs tracked; generated artifacts live in
+# build/ and reports/ and are intentionally excluded from version control.

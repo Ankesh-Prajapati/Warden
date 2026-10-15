@@ -9,9 +9,8 @@ Covers, per the project spec:
   - Optional deeper verification via `osslsigncode verify` when the tool is
     available on PATH (full digest/chain verification); falls back to
     structural-only parsing via `cryptography` otherwise
-  - Insecure auto-update heuristic: update-related strings/URLs present in
-    a binary with no evidence of WinVerifyTrust/CryptQueryObject-style
-    signature-verification APIs imported
+  - Informational update-related string indicators; static imports and
+    strings alone cannot establish updater behavior or verification logic
 
 Platform note: full Authenticode chain-of-trust validation (revocation,
 timestamp authority checks) is most reliable via Windows `signtool verify`.
@@ -70,6 +69,7 @@ class CertSummary:
     is_expired: bool
     serial_number: str = ""
     is_ca: bool = False
+    is_timestamp: bool = False
 
 
 @dataclass
@@ -127,7 +127,7 @@ def parse_signature(pe_path: Path) -> BinarySignatureInfo:
 
     now = datetime.now(timezone.utc)
     summaries: list[CertSummary] = []
-    for cert in certs:
+    for i, cert in enumerate(certs):
         subject_cn = _cn_from_name(cert.subject)
         issuer_cn = _cn_from_name(cert.issuer)
         not_before = _cert_not_valid_before(cert)
@@ -143,6 +143,7 @@ def parse_signature(pe_path: Path) -> BinarySignatureInfo:
                 is_expired=(now > not_after if not_after else False),
                 serial_number=hex(cert.serial_number),
                 is_ca=_is_ca_certificate(cert),
+                is_timestamp=_is_timestamp_certificate(cert, i, len(certs)),
             )
         )
 
@@ -155,6 +156,27 @@ def _is_ca_certificate(cert: x509.Certificate) -> bool:
         return bool(bc.ca)
     except Exception:
         return False
+
+
+def _is_timestamp_certificate(cert: x509.Certificate, cert_index: int, total_certs: int) -> bool:
+    """
+    Heuristic to identify timestamp certificates in the PKCS#7 certificate chain.
+    Timestamp certificates are usually the last certificate in the chain when
+    present, and often have specific extensions or usage properties.
+    """
+    # If there's only one certificate, it's not a timestamp certificate
+    if total_certs <= 1:
+        return False
+
+    # Timestamp certificates are often at the end of the chain
+    # This is a simplification - in reality, we'd need to check extended key usage
+    # but for now we'll use position as a heuristic
+    if cert_index == total_certs - 1:  # Last certificate in chain
+        # Additional checks could go here for EKU, etc.
+        # For now, we'll assume last cert might be timestamp
+        return True
+
+    return False
 
 
 def run_osslsigncode_verify(pe_path: Path) -> tuple[Optional[bool], Optional[str], bool]:
@@ -412,64 +434,95 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
             )
         )
 
-    for cert in sig_info.certs:
-        if cert.is_expired:
-            findings.append(
-                Finding(
-                    module="signature",
-                    rule_id="expired-signing-certificate",
-                    title=f"Expired code-signing certificate — {cert.subject_cn}",
-                    severity=Severity.HIGH,
-                    file_path=path,
-                    evidence=f"Certificate valid until {cert.not_valid_after}",
-                    description=(
-                        f"The code-signing certificate for '{cert.subject_cn}' "
-                        f"expired on {cert.not_valid_after}. Depending on "
-                        f"whether the signature carries a valid RFC3161 "
-                        f"timestamp, Windows may or may not still treat this "
-                        f"binary as validly signed — either way it signals "
-                        f"stale release/signing hygiene."
-                    ),
-                    remediation="Re-sign with a current certificate and ensure timestamping is used on all signatures.",
-                    tags=["signature", "certificate", "expired"],
-                    confidence="Medium",
-                    poc=(
-                        f"1. Confirm the certificate validity period directly:\n"
-                        f"     Windows (PowerShell):\n"
-                        f"       $sig = Get-AuthenticodeSignature -FilePath \"{path}\"\n"
-                        f"       $sig.SignerCertificate | Format-List Subject,NotBefore,NotAfter\n"
-                        f"     Linux:\n"
-                        f"       osslsigncode verify \"{path}\"   # shows cert validity dates\n\n"
-                        f"2. Check whether the signature carries a valid RFC3161 "
-                        f"timestamp (a timestamped signature can remain valid after "
-                        f"cert expiry; an untimestamped one cannot):\n"
-                        f"       osslsigncode verify \"{path}\" | grep -i timestamp\n\n"
-                        f"3. If untimestamped and expired, demonstrate the practical "
-                        f"impact: on a clean test machine with the system clock set "
-                        f"past {cert.not_valid_after}, Windows SmartScreen/AppLocker "
-                        f"will treat this binary as unsigned/untrusted, which can "
-                        f"break update mechanisms or trigger user-facing security "
-                        f"warnings during the engagement window if the client hasn't "
-                        f"already re-signed."
-                    ),
+    # Only check the leaf certificate (first in chain) for signer-related issues
+    # This prevents reporting root CA or intermediate certs as application problems
+    # Also skip if the leaf is a timestamp certificate (as it's not a code-signing certificate)
+    leaf = sig_info.certs[0]
+    if not leaf.is_timestamp:
+        if leaf.is_expired:
+            if sig_info.timestamp_present:
+                # Expired but timestamped -> informational
+                findings.append(
+                    Finding(
+                        module="signature",
+                        rule_id="expired-signing-certificate-timestamped",
+                        title=f"Expired code-signing certificate with timestamp — {leaf.subject_cn}",
+                        severity=Severity.INFO,
+                        file_path=path,
+                        evidence=f"Certificate valid until {leaf.not_valid_after}",
+                        description=(
+                            f"The code-signing certificate for '{leaf.subject_cn}' "
+                            f"expired on {leaf.not_valid_after}, but the signature includes a timestamp. "
+                            f"Windows may still treat the binary as validly signed if the timestamp is valid. "
+                            f"This indicates stale release/signing hygiene but may not break signature validation."
+                        ),
+                        remediation="Re-sign with a current certificate and ensure timestamping is used on all signatures.",
+                        tags=["signature", "certificate", "expired"],
+                        confidence="Medium",
+                        poc=(
+                            f"1. Confirm the certificate validity period directly:\n"
+                            f"     Windows (PowerShell):\n"
+                            f"       $sig = Get-AuthenticodeSignature -FilePath \"{path}\"\n"
+                            f"       $sig.SignerCertificate | Format-List Subject,NotBefore,NotAfter\n"
+                            f"     Linux:\n"
+                            f"       osslsigncode verify \"{path}\"   # shows cert validity dates\n\n"
+                            f"2. Check whether the signature carries a valid RFC3161 timestamp:\n"
+                            f"       osslsigncode verify \"{path}\" | grep -i timestamp\n\n"
+                            f"3. If you wish to verify the timestamp's validity, consult the timestamp authority.\n"
+                        ),
+                    )
                 )
-            )
+            else:
+                # Expired and no timestamp -> high severity
+                findings.append(
+                    Finding(
+                        module="signature",
+                        rule_id="expired-signing-certificate",
+                        title=f"Expired code-signing certificate — {leaf.subject_cn}",
+                        severity=Severity.HIGH,
+                        file_path=path,
+                        evidence=f"Certificate valid until {leaf.not_valid_after}",
+                        description=(
+                            f"The code-signing certificate for '{leaf.subject_cn}' "
+                            f"expired on {leaf.not_valid_after}. The signature does not include a timestamp, "
+                            f"so Windows will not trust the binary after the certificate's expiration. "
+                            f"This indicates stale release/signing hygiene and may break signature validation."
+                        ),
+                        remediation="Re-sign with a current certificate and ensure timestamping is used on all signatures.",
+                        tags=["signature", "certificate", "expired"],
+                        confidence="Medium",
+                        poc=(
+                            f"1. Confirm the certificate validity period directly:\n"
+                            f"     Windows (PowerShell):\n"
+                            f"       $sig = Get-AuthenticodeSignature -FilePath \"{path}\"\n"
+                            f"       $sig.SignerCertificate | Format-List Subject,NotBefore,NotAfter\n"
+                            f"     Linux:\n"
+                            f"       osslsigncode verify \"{path}\"   # shows cert validity dates\n\n"
+                            f"2. Check whether the signature carries a valid RFC3161 timestamp:\n"
+                            f"       osslsigncode verify \"{path}\" | grep -i timestamp\n\n"
+                            f"3. If the certificate is expired and there is no timestamp, demonstrate the practical impact:\n"
+                            f"   - On a clean test machine with the system clock set past {leaf.not_valid_after}, "
+                            f"     Windows SmartScreen/AppLocker will treat this binary as unsigned/untrusted, "
+                            f"     which can break update mechanisms or trigger user-facing security warnings.\n"
+                        ),
+                    )
+                )
 
-        if cert.self_signed:
+        if leaf.self_signed:
             findings.append(
                 Finding(
                     module="signature",
                     rule_id="self-signed-certificate",
-                    title=f"Self-signed code-signing certificate — {cert.subject_cn}",
+                    title=f"Self-signed code-signing certificate — {leaf.subject_cn}",
                     severity=Severity.MEDIUM,
                     file_path=path,
-                    evidence=f"Subject and issuer both '{cert.subject_cn}'",
+                    evidence=f"Subject and issuer both '{leaf.subject_cn}'",
                     description=(
                         "This binary is signed with a self-signed certificate "
                         "rather than one issued by a trusted public CA. "
                         "Self-signed certificates provide integrity checking "
                         "but no independent identity verification, and will "
-                        "not be trusted by default on end-user machines."
+                        f"not be trusted by default on end-user machines."
                     ),
                     remediation="Obtain a code-signing certificate from a trusted public CA for production releases.",
                     tags=["signature", "certificate", "self-signed"],
@@ -478,37 +531,37 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
                         f"1. Confirm the self-signed chain directly:\n"
                         f"     osslsigncode verify \"{path}\"\n"
                         f"   Expect a chain-of-trust error (e.g. 'self signed "
-                        f"certificate') since Subject and Issuer both resolve to "
-                        f"'{cert.subject_cn}'.\n\n"
-                        f"2. On Windows, confirm the end-user experience directly: "
-                        f"copy the binary to a clean machine that has never had this "
-                        f"publisher's cert added to its Trusted Publishers/Root "
-                        f"store, then check:\n"
-                        f"     Get-AuthenticodeSignature -FilePath \"{path}\" | "
-                        f"Select Status, StatusMessage\n"
-                        f"   Expect Status = 'UnknownError' or similar, and no green "
-                        f"'verified publisher' indication in the file's Properties > "
-                        f"Digital Signatures tab.\n\n"
-                        f"3. Confirm whether this cert is the client's intentional "
-                        f"internal-tooling cert (common and low-risk for internal-"
-                        f"only utilities) versus something shipped to end customers "
-                        f"(higher-risk, since customers have no basis to trust it)."
-                    ),
-                )
+                    f"certificate') since Subject and Issuer both resolve to "
+                    f"'{leaf.subject_cn}'.\n\n"
+                    f"2. On Windows, confirm the end-user experience directly: "
+                    f"copy the binary to a clean machine that has never had this "
+                    f"publisher's cert added to its Trusted Publishers/Root "
+                    f"store, then check:\n"
+                    f"     Get-AuthenticodeSignature -FilePath \"{path}\" | "
+                    f"Select Status, StatusMessage\n"
+                    f"   Expect Status = 'UnknownError' or similar, and no green "
+                    f"'verified publisher' indication in the file's Properties > "
+                    f"Digital Signatures tab.\n\n"
+                    f"3. Confirm whether this cert is the client's intentional "
+                    f"internal-tooling cert (common and low-risk for internal-"
+                    f"only utilities) versus something shipped to end customers "
+                    f"(higher-risk, since customers have no basis to trust it)."
+                ),
             )
+        )
 
-        if cert.signature_hash_algorithm.lower() in WEAK_HASH_ALGORITHMS:
+        if leaf.signature_hash_algorithm.lower() in WEAK_HASH_ALGORITHMS:
             findings.append(
                 Finding(
                     module="signature",
                     rule_id="weak-signature-algorithm",
-                    title=f"Weak signature hash algorithm ({cert.signature_hash_algorithm}) — {cert.subject_cn}",
+                    title=f"Weak signature hash algorithm ({leaf.signature_hash_algorithm}) — {leaf.subject_cn}",
                     severity=Severity.HIGH,
                     file_path=path,
-                    evidence=f"Certificate signed using {cert.signature_hash_algorithm}",
+                    evidence=f"Certificate signed using {leaf.signature_hash_algorithm}",
                     description=(
-                        f"The certificate for '{cert.subject_cn}' uses "
-                        f"{cert.signature_hash_algorithm}, which has known "
+                        f"The certificate for '{leaf.subject_cn}' uses "
+                        f"{leaf.signature_hash_algorithm}, which has known "
                         f"collision weaknesses and is deprecated for code "
                         f"signing. Modern tooling and OS trust policies "
                         f"increasingly reject SHA-1/MD5-signed binaries "
@@ -530,7 +583,7 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
                         f"Verify on a current Windows build:\n"
                         f"     Get-AuthenticodeSignature -FilePath \"{path}\" | "
                         f"Select Status, StatusMessage\n\n"
-                        f"3. Document both the raw algorithm identifier ({cert.signature_hash_algorithm}) "
+                        f"3. Document both the raw algorithm identifier ({leaf.signature_hash_algorithm}) "
                         f"and the observed OS trust outcome as evidence — this "
                         f"combination demonstrates concrete impact rather than a "
                         f"theoretical cryptographic weakness."
@@ -601,10 +654,9 @@ def _publisher_consistency_findings(all_sig_info: list[BinarySignatureInfo]) -> 
 
 def _auto_update_finding(pe_path: Path) -> Finding | None:
     """
-    Heuristic: does this binary reference update-related URLs/keywords
-    without importing any signature/trust-verification API? A real
-    positive here means the updater likely trusts downloaded payloads
-    without verifying them — a common thick-client finding class.
+    Report update-related strings as an informational indicator only.
+    Strings and import-table contents cannot establish whether an updater
+    exists or whether downloaded content is verified.
     """
     try:
         data = pe_path.read_bytes()
@@ -629,51 +681,44 @@ def _auto_update_finding(pe_path: Path) -> Finding | None:
     }
     has_trust_api = bool(all_funcs & TRUST_VERIFY_APIS)
 
-    if has_trust_api:
-        return None  # looks like it does verify something — no finding
-
     matched_kw = next(kw for kw in UPDATE_KEYWORDS if kw in joined_lower)
+    trust_import_note = (
+        "recognized trust API import present"
+        if has_trust_api
+        else "no recognized trust API import found"
+    )
     return Finding(
         module="signature",
         rule_id="insecure-auto-update-indicator",
-        title="Possible auto-update mechanism without signature verification",
-        severity=Severity.MEDIUM,
+        title="Update-related strings detected",
+        severity=Severity.INFO,
         file_path=str(pe_path),
-        evidence=f"Update-related string matched ('{matched_kw}'); no WinVerifyTrust/CryptQueryObject-style import found",
+        evidence=(
+            f"Update-related string matched ('{matched_kw}'); {trust_import_note}"
+        ),
         description=(
-            "This binary contains strings suggesting an update/version-"
-            "check mechanism, but does not import any Windows API commonly "
-            "used to verify a downloaded payload's signature before "
-            "execution. This is a static heuristic, not proof of an "
-            "exploitable auto-update flaw — confirm manually by reviewing "
-            "the update flow (ideally with source or a decompiler)."
+            "This binary contains an update-related string. Such strings "
+            "and the presence or absence of particular imports do not show "
+            "whether this binary implements an updater or whether downloaded "
+            "content is authenticated. Treat this as an informational review "
+            "indicator only; the verification behavior has not been established."
         ),
         remediation=(
-            "Ensure any auto-update mechanism verifies the downloaded "
-            "payload's Authenticode signature (e.g. via WinVerifyTrust) "
-            "and expected publisher before executing it, and serves "
-            "updates over TLS with certificate validation enabled."
+            "If source or decompiled control flow confirms an update mechanism, "
+            "review its package-authentication and transport-validation logic "
+            "before drawing a security conclusion."
         ),
         tags=["signature", "auto-update", "heuristic"],
         confidence="Low",
         poc=(
-            f"1. Confirm the update-related string directly:\n"
-            f"     strings -n 6 \"{pe_path}\" | grep -i '{matched_kw}'\n"
-            f"   (Windows: strings64.exe -n 6 \"{pe_path}\" | findstr /i \"{matched_kw}\")\n\n"
-            f"2. Confirm the import table lacks trust-verification APIs:\n"
-            f"     dumpbin /imports \"{pe_path}\" | findstr /i \"WinVerifyTrust CryptQueryObject\"\n"
-            f"   (expect no output if this finding is accurate)\n\n"
-            f"3. Dynamic confirmation (requires a controlled test environment "
-            f"and, if the update server is client-owned, written authorization): "
-            f"intercept the update check/download with a proxy (Burp/mitmproxy) "
-            f"and serve a modified payload with a valid file structure but "
-            f"altered content. If the application executes the modified payload "
-            f"without rejecting it, this confirms the updater does not verify "
-            f"payload integrity/authenticity before execution.\n\n"
-            f"4. If dynamic testing is out of scope for this engagement, report "
-            f"this as a static indicator requiring source-level or decompiled "
-            f"confirmation of the actual update-verification logic before "
-            f"treating it as a confirmed (rather than potential) finding."
+            f"1. Confirm the string indicator with `strings` or a PE viewer: "
+            f"'{matched_kw}'.\n"
+            "2. Review source or decompiled control flow to establish whether "
+            "the string is used by an updater and how payload verification is "
+            "performed. A missing import is not proof that verification is absent.\n"
+            "3. Do not test by intercepting or replacing payloads for this "
+            "third-party binary. Any runtime validation must use a deliberately "
+            "isolated, authorized lab fixture."
         ),
     )
 

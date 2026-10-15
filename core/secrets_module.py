@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import ipaddress
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,7 +30,7 @@ from core.fs_walk import (
     iter_target_files,
     read_text_safely,
 )
-from core.models import Finding, Severity, redact
+from core.models import Finding, Severity
 from core.pe_utils import extract_strings_from_bytes, get_version_strings, is_pe_file, parse_pe
 from core.indicator_utils import is_version_attribute_context
 from core.rules import Rule, load_rules
@@ -65,6 +66,7 @@ PLACEHOLDER_MARKERS = {
     "test123", "dummy", "placeholder",
     "insert_key_here", "todo", "yourpassword", "replaceme", "sample",
     "<insert", "<your", "<api", "notarealkey", "notreal", "fakekey",
+    "demo", "synthetic", "test_only", "not_valid",
 }
 
 
@@ -74,8 +76,42 @@ def _isolate_value(evidence: str) -> str:
     `key: value` match, so placeholder detection judges the credential
     itself rather than the variable name it's assigned to (which routinely
     contains words like "secret" or "password" even for real credentials).
-    Falls back to the full evidence string when no separator is present.
+    For connection strings, attempts to isolate values by looking for
+    key=value patterns within semicolon/comma-separated fields,
+    prioritizing security-relevant fields like passwords.
+    Falls back to the original key-value isolation if no connection string
+    pattern is found.
     """
+    # First, try to handle as a connection string with semicolon/comma delimited key=value pairs
+    if ';' in evidence or ',' in evidence:
+        # Split by both semicolon and comma to get potential key=value pairs
+        import re
+        pairs = re.split(r'[;,]\s*', evidence)
+
+        # First pass: look for password-related fields (most likely to contain secrets)
+        password_keywords = {"pass", "password", "pwd", "secret", "key", "token"}
+        for pair in pairs:
+            if '=' in pair:
+                # Split on first '=' to get key and value
+                key_value = pair.split('=', 1)
+                if len(key_value) == 2:
+                    key = key_value[0].strip().lower()
+                    value = key_value[1].strip().strip("'\"")
+                    # Check if this looks like a password/security field
+                    if any(pwd_keyword in key for pwd_keyword in password_keywords):
+                        if value:
+                            return value
+
+        # Second pass: return the first non-empty value if no password field found
+        for pair in pairs:
+            if '=' in pair:
+                key_value = pair.split('=', 1)
+                if len(key_value) == 2:
+                    value = key_value[1].strip().strip("'\"")
+                    if value:
+                        return value
+
+    # Fallback to original behavior for key-value pairs
     for sep in ("=", ":"):
         if sep in evidence:
             candidate = evidence.rsplit(sep, 1)[-1].strip().strip("'\"")
@@ -262,7 +298,129 @@ def _looks_like_certificate_authority_string(evidence: str) -> bool:
     return any(marker in lowered for marker in _CERT_AUTHORITY_MARKERS)
 
 
-def _extract_context(lines: list[str], line_no: int, radius: int = 2, max_line_len: int = 200) -> str:
+_HEX_DIGEST_LENGTHS = {32, 40, 56, 64, 96, 128}
+_HEX_DIGEST_RE = re.compile(r"^[0-9a-f]+$", re.IGNORECASE)
+_WAMP_CALL_ID_RE = re.compile(r"\bwamp\b.{0,100}\bcall[\s_-]*id\b", re.IGNORECASE)
+_COMPILER_SYMBOL_RE = re.compile(
+    r"(?:\.\?AV|(?:^|\s)\?[\w?$@]+@|__imp_|_Z(?:N|TS|TV))",
+    re.IGNORECASE,
+)
+_RESOURCE_MANIFEST_RE = re.compile(
+    r"(?i)(?:\bthemes?/|manifest\.(?:json|ya?ml)\b|"
+    r"\.(?:png|svg|qss|theme)\b)"
+)
+_IP_NETWORK_CONTEXT_RE = re.compile(
+    r"(?i)(?:https?://|\b(?:dns|ip|ipv4|host|server|endpoint|proxy|socket|"
+    r"network|address|remote|listen|connect|url)\b)"
+)
+
+
+def _looks_like_hash_or_thumbprint(candidate: str) -> bool:
+    return len(candidate) in _HEX_DIGEST_LENGTHS and bool(_HEX_DIGEST_RE.fullmatch(candidate))
+
+
+def _looks_like_crypto_algorithm_identifier(candidate: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]", "", candidate.lower())
+    if re.fullmatch(r"(?:id)?gost(?:r)?\d{4,7}[a-z0-9]*", normalized):
+        return True
+    if normalized.startswith("pbe") and any(
+        algorithm in normalized
+        for algorithm in ("sha1", "sha256", "sha384", "sha512", "aes", "des", "rc4")
+    ):
+        return True
+    if re.fullmatch(
+        r"dhsinglepass(?:std|cofactor)dhsha\d+kdfscheme",
+        normalized,
+    ):
+        return True
+    return bool(
+        re.fullmatch(
+            r"(?:id)?(?:sha(?:1|224|256|384|512)(?:with)?(?:rsa|ecdsa)?"
+            r"|md[245](?:with)?rsa|aes(?:128|192|256)(?:cbc|cfb|gcm)?"
+            r"|rsa(?:encryption|oaep|pkcs1)|ed25519|x25519)",
+            normalized,
+        )
+    )
+
+
+def _entropy_candidate_has_benign_context(
+    candidate: str,
+    content: str,
+    offset: int,
+) -> bool:
+    if (
+        _looks_like_sequential_charset(candidate)
+        or _looks_like_partitioned_charset(candidate)
+        or _looks_like_code_identifier(candidate)
+        or _looks_like_embedded_image_blob(candidate)
+        or _looks_like_certificate_authority_string(candidate)
+        or _looks_like_hash_or_thumbprint(candidate)
+        or _looks_like_crypto_algorithm_identifier(candidate)
+        or _looks_like_deterministic_hex_table(candidate)
+    ):
+        return True
+
+    start = content.rfind("\n", 0, offset) + 1
+    end = content.find("\n", offset + len(candidate))
+    if end < 0:
+        end = len(content)
+    context = content[start:end]
+    if _WAMP_CALL_ID_RE.search(context) or _COMPILER_SYMBOL_RE.search(context):
+        return True
+
+    candidate_lower = candidate.lower()
+    if (
+        _RESOURCE_MANIFEST_RE.search(context)
+        and (
+            candidate_lower.startswith("png")
+            or "manifest" in candidate_lower
+            or "theme" in candidate_lower
+        )
+    ):
+        return True
+    return False
+
+
+def _looks_like_deterministic_hex_table(candidate: str) -> bool:
+    normalized = candidate.lower()
+    if re.fullmatch(r"0123456789(?:abcdef){1,2}", normalized):
+        return True
+    if len(candidate) < 16 or len(candidate) % 2 or not _HEX_DIGEST_RE.fullmatch(candidate):
+        return False
+    values = [int(candidate[index:index + 2], 16) for index in range(0, len(candidate), 2)]
+    return all(right == left + 1 for left, right in zip(values, values[1:]))
+
+
+def _ip_indicator_scope(value: str) -> str:
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return "invalid"
+    if address.is_loopback:
+        return "loopback"
+    if address.is_private:
+        return "private"
+    if address.is_global:
+        return "public"
+    return "special"
+
+
+def _has_network_context(content: str, match_start: int) -> bool:
+    start = content.rfind("\n", 0, match_start) + 1
+    end = content.find("\n", match_start)
+    if end < 0:
+        end = len(content)
+    return bool(_IP_NETWORK_CONTEXT_RE.search(content[start:end]))
+
+
+def _extract_context(
+    lines: list[str],
+    line_no: int,
+    radius: int = 2,
+    max_line_len: int = 200,
+    rules: list[Rule] | None = None,
+    source_locations: list[tuple[int, int]] | None = None,
+) -> str:
     """
     Build a numbered, multi-line code-context snippet around `line_no`
     (1-indexed) so an analyst can pinpoint the finding in the actual file
@@ -284,8 +442,33 @@ def _extract_context(lines: list[str], line_no: int, radius: int = 2, max_line_l
         if len(raw) > max_line_len:
             raw = raw[:max_line_len] + " …(truncated)"
         marker = ">>" if i == line_no else "  "
-        out.append(f"{marker} {str(i).rjust(width)} | {raw}")
+        if source_locations is not None and i - 1 < len(source_locations):
+            string_offset = source_locations[i - 1][0]
+            location = f"string {i} @ offset 0x{string_offset:X}"
+        else:
+            location = str(i).rjust(width)
+        out.append(f"{marker} {location} | {raw}")
     return "\n".join(out)
+
+
+def _binary_byte_offset(
+    content: str,
+    char_offset: int,
+    source_locations: list[tuple[int, int]] | None,
+) -> int | None:
+    if source_locations is None:
+        return None
+    line_no = content.count("\n", 0, char_offset) + 1
+    line_index = line_no - 1
+    if line_index < 0 or line_index >= len(source_locations):
+        return None
+    line_start = content.rfind("\n", 0, char_offset) + 1
+    string_offset, bytes_per_character = source_locations[line_index]
+    return string_offset + (char_offset - line_start) * bytes_per_character
+
+
+def _source_column_number(content: str, char_offset: int) -> int:
+    return char_offset - content.rfind("\n", 0, char_offset)
 
 
 def _looks_like_test_or_example_content(evidence: str) -> bool:
@@ -293,7 +476,8 @@ def _looks_like_test_or_example_content(evidence: str) -> bool:
     Detect if evidence is likely from test/example content rather than real credentials.
     This helps reduce false positives in test files, examples, and documentation.
     """
-    lowered = evidence.lower()
+    # Work with isolated value to avoid false positives from variable names
+    lowered = _isolate_value(evidence).lower()
     test_indicators = [
         "test", "example", "sample", "demo", "fake", "dummy", "placeholder",
         "changeme", "insert", "your_", "not_real", "invalid", "expired",
@@ -306,7 +490,8 @@ def _looks_like_test_or_example_content(evidence: str) -> bool:
         "jwt_here", "put_jwt_here", "enter_jwt_here", "token_here",
         "put_token_here", "enter_token_here", "secret_here", "put_secret_here",
         "enter_secret_here", "key_here", "put_key_here", "enter_key_here",
-        "todo", "<insert", "<your", "<api", "notreal", "fakekey"
+        "todo", "<insert", "<your", "<api", "notreal", "fakekey",
+        "demo", "synthetic", "test_only", "not_valid",
     ]
 
     # Check for common test/example patterns
@@ -423,17 +608,42 @@ def _confidence_for(evidence: str, base: str = "Medium") -> str:
         return "Low"
     if _looks_like_test_or_example_content(evidence):
         return "Low"
-    score = 1
+    score = 0
     value = _isolate_value(evidence)
+
+    # Length scoring
+    if len(value) >= 8:
+        score += 1
+    if len(value) >= 12:
+        score += 1
+    if len(value) >= 16:
+        score += 1
     if len(value) >= 24:
         score += 1
-    if any(c.isdigit() for c in value) and any(c.isalpha() for c in value):
+
+    # Character diversity scoring
+    has_digit = any(c.isdigit() for c in value)
+    has_letter = any(c.isalpha() for c in value)
+    has_special = any(not c.isalnum() for c in value)
+
+    if has_digit and has_letter:
         score += 1
-    if re.search(r"(?i)(secret|token|password|api[_-]?key|client[_-]?secret)", evidence):
+    if has_special:
         score += 1
-    if score >= 4:
+
+    # Penalize excessive repetition of same character
+    if len(value) > 0:
+        if len(set(value)) == 1:  # All same character
+            score -= 2
+        elif len(set(value)) < min(5, len(value) // 2):  # Very low diversity
+            score -= 1
+
+    if score >= 5:
         return "High"
-    return base
+    elif score >= 3:
+        return "Medium"
+    else:
+        return "Low"
 
 
 def _b64url_json(part: str) -> dict:
@@ -441,7 +651,13 @@ def _b64url_json(part: str) -> dict:
     return json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8", errors="ignore"))
 
 
-def _jwt_findings(content: str, file_path: str, lines: list[str]) -> list[Finding]:
+def _jwt_findings(
+    content: str,
+    file_path: str,
+    lines: list[str],
+    rules: list[Rule] | None = None,
+    source_locations: list[tuple[int, int]] | None = None,
+) -> list[Finding]:
     findings = []
     for match in JWT_RE.finditer(content):
         token = match.group(0)
@@ -477,14 +693,21 @@ def _jwt_findings(content: str, file_path: str, lines: list[str]) -> list[Findin
             title="JWT token embedded in file",
             severity=Severity.HIGH if "exp" in payload else Severity.MEDIUM,
             file_path=file_path,
-            evidence=redact(token),
+            evidence=token,
             description="A JSON Web Token was found and decoded successfully. Embedded JWTs can grant direct access until expiry and may expose issuer, audience, and role claims.",
             remediation="Remove embedded JWTs, rotate/revoke the token, and issue short-lived tokens at runtime through an authenticated flow.",
             poc=_build_text_poc(file_path, line_no, "jwt-token", token),
             line_number=line_no,
+            column_number=_source_column_number(content, match.start()),
+            offset=_binary_byte_offset(content, match.start(), source_locations),
             tags=["jwt", "token", "auth"],
             confidence=confidence,
-            extra={"jwt": {"header": header, "payload": payload, "alg": header.get("alg"), **interesting}, "context": _extract_context(lines, line_no)},
+            extra={
+                "jwt": {"header": header, "payload": payload, "alg": header.get("alg"), **interesting},
+                "context": _extract_context(
+                    lines, line_no, rules=rules, source_locations=source_locations
+                ),
+            },
         ))
     return findings
 
@@ -503,7 +726,13 @@ def _parse_db_uri(uri: str) -> dict:
     }
 
 
-def _db_uri_findings(content: str, file_path: str, lines: list[str]) -> list[Finding]:
+def _db_uri_findings(
+    content: str,
+    file_path: str,
+    lines: list[str],
+    rules: list[Rule] | None = None,
+    source_locations: list[tuple[int, int]] | None = None,
+) -> list[Finding]:
     findings = []
     for match in DB_URI_RE.finditer(content):
         uri = match.group(0).rstrip("),.;")
@@ -518,36 +747,53 @@ def _db_uri_findings(content: str, file_path: str, lines: list[str]) -> list[Fin
             title="Database connection string exposed",
             severity=Severity.HIGH if parsed.get("password") else Severity.MEDIUM,
             file_path=file_path,
-            evidence=redact(uri),
+            evidence=uri,
             description="A database connection string was found and parsed into host, port, database, username, password, and SSL-related fields.",
             remediation="Move database connection settings to a secret store, rotate exposed credentials, and require TLS for database connections.",
             poc=_build_text_poc(file_path, line_no, "database-connection-string", uri),
             line_number=line_no,
+            column_number=_source_column_number(content, match.start()),
+            offset=_binary_byte_offset(content, match.start(), source_locations),
             tags=["database", "connection-string", "credential"],
             confidence="High" if parsed.get("password") and parsed.get("host") else "Medium",
-            extra={"database_connection": parsed, "context": _extract_context(lines, line_no)},
+            extra={
+                "database_connection": parsed,
+                "context": _extract_context(
+                    lines, line_no, rules=rules, source_locations=source_locations
+                ),
+            },
         ))
     return findings
 
 
 def _correlate_related_secrets(findings: list[Finding]) -> list[Finding]:
     by_file_line: dict[tuple[str, int], dict[str, Finding]] = {}
+    assigned_findings: set[str] = set()  # Track fingerprints of findings already assigned
     for f in findings:
-        if f.module != "secrets" or not f.line_number:
+        source_line = f.line_number or f.extra.get("extracted_string_index")
+        if f.module != "secrets" or not source_line:
             continue
         if f.rule_id in {"database-connection-string", "jwt-token", "correlated-secret-bundle"}:
+            continue
+        # Skip low-confidence findings as they shouldn't contribute to high-confidence correlations
+        if f.confidence == "Low":
             continue
         blob = f"{f.rule_id} {f.title} {f.evidence}".lower()
         for kind, markers in CORRELATION_KEYS.items():
             if any(m in blob for m in markers):
-                by_file_line.setdefault((f.file_path, f.line_number), {})[kind] = f
+                # Only assign this finding to one category to prevent one finding from fulfilling multiple roles
+                f_fingerprint = f.fingerprint()
+                if f_fingerprint not in assigned_findings:
+                    by_file_line.setdefault((f.file_path, source_line), {})[kind] = f
+                    assigned_findings.add(f_fingerprint)
+                    break  # Assign to first matching category only
     correlated = []
     consumed = set()
     for (_file, _line), parts in by_file_line.items():
         if len(parts) < 2 or not ({"password", "api_key"} & set(parts)):
             continue
         seed = next(iter(parts.values()))
-        evidence = "; ".join(f"{kind}={redact(f.evidence)}" for kind, f in parts.items())
+        evidence = "; ".join(f"{kind}={f.evidence}" for kind, f in parts.items())
         correlated.append(Finding(
             module="secrets",
             rule_id="correlated-secret-bundle",
@@ -558,18 +804,27 @@ def _correlate_related_secrets(findings: list[Finding]) -> list[Finding]:
             description="Multiple related credential indicators appear together and are reported as one correlated secret bundle.",
             remediation="Rotate all related credentials together and move the complete connection profile into a managed secrets store.",
             line_number=seed.line_number,
-            tags=["credential", "correlated", "secret-bundle"],
+            column_number=seed.column_number,
+            offset=seed.offset,
+            tags=["credential", "correlated", "secret-bundle"]
+            + (["embedded-in-binary"] if "embedded-in-binary" in seed.tags else []),
             confidence="High",
-            extra={"components": sorted(parts.keys()), "context": seed.extra.get("context", "")},
+            extra={
+                "components": sorted(parts.keys()),
+                "context": seed.extra.get("context", ""),
+                **(
+                    {"extracted_string_index": seed.extra["extracted_string_index"]}
+                    if "extracted_string_index" in seed.extra else {}
+                ),
+            },
         ))
         consumed.update(f.fingerprint() for f in parts.values())
     return [f for f in findings if f.fingerprint() not in consumed] + correlated
 
 
-def _build_text_poc(file_path: str, line_no: int, rule_id: str, evidence_raw: str) -> str:
+def _build_text_poc(file_path: str, line_no: int, rule_id: str, evidence: str) -> str:
     """Build a reproducible, analyst-ready PoC block for a text/config-file match."""
     filename = Path(file_path).name
-    search_term = evidence_raw[:20].split()[0] if evidence_raw.strip() else rule_id
     return (
         f"1. Open the file directly:\n"
         f"     {file_path}\n"
@@ -578,17 +833,18 @@ def _build_text_poc(file_path: str, line_no: int, rule_id: str, evidence_raw: st
         f"   Windows (PowerShell):\n"
         f"     Select-String -Path \"{file_path}\" -Pattern \"{rule_id}\" -SimpleMatch:$false\n"
         f"   Linux/macOS:\n"
-        f"     grep -n -i '{search_term}' \"{file_path}\"\n\n"
+        f"     grep -n -i '{rule_id}' \"{file_path}\"\n\n"
         f"3. Confirm exploitability: if this is a live/production credential, attempt "
         f"authentication against the associated service using the value found at "
         f"line {line_no} of {filename} (in an authorized test window only) to "
         f"confirm it is active before including it as a confirmed finding rather "
         f"than a potential one.\n\n"
-        f"4. Evidence capture for the report: screenshot the line in context."
+        f"4. Matched evidence: {evidence}\n\n"
+        f"5. Evidence capture for the report: screenshot the line in context."
     )
 
 
-def _build_entropy_poc(file_path: str, line_no: int, evidence_redacted: str) -> str:
+def _build_entropy_poc(file_path: str, line_no: int, evidence: str) -> str:
     return (
         f"1. Open {file_path} at line {line_no} and manually inspect the "
         f"high-entropy token in context — entropy scoring flags candidates, "
@@ -599,19 +855,19 @@ def _build_entropy_poc(file_path: str, line_no: int, evidence_redacted: str) -> 
         f"3. If it resembles a live credential, test it against the likely "
         f"issuing service in an authorized test window to confirm activity "
         f"before escalating severity in the final report.\n\n"
-        f"4. Evidence for this finding: {evidence_redacted}"
+        f"4. Evidence for this finding: {evidence}"
     )
 
 
-def _build_binary_poc(file_path: str, evidence_redacted: str) -> str:
+def _build_binary_poc(file_path: str, evidence: str) -> str:
     filename = Path(file_path).name
     return (
         f"1. Extract printable strings from the binary directly to confirm "
         f"independently:\n"
         f"   Windows (Sysinternals strings.exe):\n"
-        f"     strings64.exe -n 6 \"{file_path}\" | findstr /i \"{evidence_redacted[:8]}\"\n"
+        f"     strings64.exe -n 6 \"{file_path}\"\n"
         f"   Linux:\n"
-        f"     strings -n 6 \"{file_path}\" | grep -i '{evidence_redacted[:8]}'\n\n"
+        f"     strings -n 6 \"{file_path}\"\n\n"
         f"2. Open {filename} in a PE viewer (CFF Explorer, Detect It Easy, or "
         f"IDA/Ghidra) and locate the string in the resource/data section to "
         f"confirm it is not dead code or a leftover debug string.\n\n"
@@ -619,7 +875,7 @@ def _build_binary_poc(file_path: str, evidence_redacted: str) -> str:
         f"rotate the credential and remove it from the compiled binary — "
         f"hardcoded strings in compiled code are trivially recoverable with "
         f"basic reverse-engineering tools regardless of packing.\n\n"
-        f"4. Evidence: {evidence_redacted}"
+        f"4. Matched evidence: {evidence}"
     )
 
 
@@ -686,8 +942,10 @@ def _scan_text_content(
     file_path: str,
     rules: list[Rule],
     enable_entropy: bool,
+    source_locations: list[tuple[int, int]] | None = None,
 ) -> list[Finding]:
     findings: list[Finding] = []
+    matched_evidence: list[str] = []
     lines = content.splitlines()
 
     # --- Regex rule matches, tracked with line numbers ---
@@ -707,6 +965,17 @@ def _scan_text_content(
                 # version="/Version:/FileVersion= style attribute, this is
                 # a declared version number, not a network indicator.
                 continue
+            address_scope = None
+            if rule.id == "hardcoded-ip":
+                address_scope = _ip_indicator_scope(evidence_raw.strip())
+                if address_scope == "invalid":
+                    continue
+                if (
+                    source_locations is not None
+                    and address_scope != "loopback"
+                    and not _has_network_context(content, match.start())
+                ):
+                    continue
             if rule.id in ("generic-password-assignment", "odbc-pwd") and _looks_like_sql_noise(evidence_raw):
                 # A password/PWD= regex has no way to know where a real
                 # assignment's value ends versus adjacent unrelated text —
@@ -719,35 +988,89 @@ def _scan_text_content(
                 # actual credential.
                 continue
             line_no = content.count("\n", 0, match.start()) + 1
+            severity = rule.severity
+            title = rule.description
+            description = (
+                f"Pattern matching rule '{rule.id}' ({rule.description}) "
+                "was found in this file."
+            )
+            confidence = _confidence_for(evidence_raw)
+            remediation = (
+                "Remove hardcoded credentials/secrets from source and "
+                "configuration files. Use a secrets manager (Azure Key "
+                "Vault, AWS Secrets Manager, HashiCorp Vault) or environment "
+                "variables injected at runtime, and rotate the exposed "
+                "credential immediately."
+            )
+            poc = _build_text_poc(file_path, line_no, rule.id, evidence_raw)
+            extra = {
+                "context": _extract_context(
+                    lines, line_no, rules=rules, source_locations=source_locations
+                )
+            }
+            if rule.id == "hardcoded-ip":
+                severity = Severity.INFO if address_scope == "loopback" else Severity.LOW
+                title = (
+                    "Loopback IPv4 configuration indicator"
+                    if address_scope == "loopback"
+                    else "Embedded IPv4 address indicator"
+                )
+                confidence = "High"
+                description = (
+                    f"This static string is a {address_scope} IPv4 address. "
+                    "Its presence alone does not establish that the application "
+                    "connects to it or that the address is vulnerable. Loopback "
+                    "addresses refer to the local host."
+                )
+                remediation = (
+                    "Confirm whether this address is an intentional endpoint for "
+                    "the supported deployment. Move environment-specific values "
+                    "to configuration when appropriate; retain intentional "
+                    "loopback addresses for local-only services or IPC."
+                )
+                ip_offset = _binary_byte_offset(
+                    content, match.start(), source_locations
+                )
+                location = (
+                    f"near byte offset 0x{ip_offset:X}"
+                    if ip_offset is not None
+                    else f"at line {line_no}"
+                )
+                poc = (
+                    "Static verification:\n"
+                    f"  1. Locate the IPv4 literal in '{Path(file_path).name}' "
+                    f"{location}.\n"
+                    "  2. Review the surrounding resource/configuration and, if "
+                    "available, the source or decompiled call site to establish "
+                    "whether it is used as a network endpoint.\n"
+                    "  3. A static address alone does not establish a connection "
+                    "or vulnerability. Treat loopback values as local indicators; "
+                    "do not probe external addresses without authorization."
+                )
+                extra["ip_scope"] = address_scope
             findings.append(
                 Finding(
                     module="secrets",
                     rule_id=rule.id,
-                    title=rule.description,
-                    severity=rule.severity,
+                    title=title,
+                    severity=severity,
                     file_path=file_path,
                     evidence=evidence_raw,
-                    description=(
-                        f"Pattern matching rule '{rule.id}' ({rule.description}) "
-                        f"was found in this file."
-                    ),
-                    remediation=(
-                        "Remove hardcoded credentials/secrets from source and "
-                        "configuration files. Use a secrets manager (Azure Key "
-                        "Vault, AWS Secrets Manager, HashiCorp Vault) or environment "
-                        "variables injected at runtime, and rotate the exposed "
-                        "credential immediately."
-                    ),
-                    poc=_build_text_poc(file_path, line_no, rule.id, evidence_raw),
+                    description=description,
+                    remediation=remediation,
+                    poc=poc,
                     line_number=line_no,
+                    column_number=_source_column_number(content, match.start()),
+                    offset=_binary_byte_offset(content, match.start(), source_locations),
                     tags=rule.tags,
-                    confidence=_confidence_for(evidence_raw),
-                    extra={"context": _extract_context(lines, line_no)},
+                    confidence=confidence,
+                    extra=extra,
                 )
             )
+            matched_evidence.append(evidence_raw)
 
-    findings.extend(_jwt_findings(content, file_path, lines))
-    findings.extend(_db_uri_findings(content, file_path, lines))
+    findings.extend(_jwt_findings(content, file_path, lines, rules, source_locations))
+    findings.extend(_db_uri_findings(content, file_path, lines, rules, source_locations))
 
     # --- Entropy-based catch-all for secrets with no known pattern ---
     if enable_entropy:
@@ -757,31 +1080,27 @@ def _scan_text_content(
             # exact-match, since a regex rule often captures the whole
             # "key=VALUE" assignment while the entropy scanner isolates just
             # the VALUE token (or vice versa), which is still the same secret.
-            if any(candidate in f.evidence or f.evidence in candidate for f in findings):
+            if any(candidate in evidence or evidence in candidate for evidence in matched_evidence):
                 continue
-            if _looks_like_sequential_charset(candidate):
+            if _looks_like_placeholder(candidate):
                 continue
-            if _looks_like_partitioned_charset(candidate):
-                continue
-            if _looks_like_code_identifier(candidate):
-                continue
-            if _looks_like_embedded_image_blob(candidate):
-                continue
-            if _looks_like_certificate_authority_string(candidate):
+            if _entropy_candidate_has_benign_context(candidate, content, offset):
                 continue
             line_no = content.count("\n", 0, offset) + 1
             findings.append(
                 Finding(
                     module="secrets",
                     rule_id="high-entropy-string",
-                    title="High-entropy string (possible unrecognized secret)",
-                    severity=Severity.MEDIUM,
+                    title="Unclassified high-entropy string",
+                    severity=Severity.LOW,
                     file_path=file_path,
                     evidence=candidate,
                     description=(
-                        "A string with unusually high randomness (Shannon entropy) "
-                        "was found, which often indicates an API key, token, or "
-                        "password that doesn't match a known vendor pattern."
+                        "A string scored above the entropy threshold, but entropy "
+                        "alone does not establish that it is a credential. Review "
+                        "the surrounding context and verify any suspected secret "
+                        "through an independent identifier or application-specific "
+                        "evidence."
                     ),
                     remediation=(
                         "Manually review this value. If it is a credential or "
@@ -789,17 +1108,23 @@ def _scan_text_content(
                         "via a secrets manager or environment variable instead."
                     ),
                     line_number=line_no,
+                    column_number=_source_column_number(content, offset),
+                    offset=_binary_byte_offset(content, offset, source_locations),
                     tags=["entropy", "generic"],
                     confidence="Low",  # entropy hits are inherently noisier
                     poc=_build_entropy_poc(file_path, line_no, candidate),
-                    extra={"context": _extract_context(lines, line_no)},
+                    extra={
+                        "context": _extract_context(
+                            lines, line_no, rules=rules, source_locations=source_locations
+                        )
+                    },
                 )
             )
 
     return findings
 
 
-def _config_intel_findings(path: Path) -> list[Finding]:
+def _config_intel_findings(path: Path, rules: list[Rule] | None = None) -> list[Finding]:
     findings = []
     for setting in extract_interesting_settings(path):
         value = setting["value"]
@@ -811,7 +1136,7 @@ def _config_intel_findings(path: Path) -> list[Finding]:
             title=f"{setting['format']} configuration exposes security-relevant setting",
             severity=Severity.MEDIUM if sensitive else Severity.LOW,
             file_path=str(path),
-            evidence=f"{key}={redact(str(value)) if sensitive else value}",
+            evidence=f"{key}={value}",
             description="Warden parsed this configuration file and identified an authentication, database, logging, TLS, or debug setting.",
             remediation="Review this setting for production safety. Keep secrets out of config files, disable debug mode, enforce TLS verification, and avoid verbose sensitive logging.",
             tags=["config-intelligence"] + setting["tags"],
@@ -839,9 +1164,19 @@ def _scan_pe_strings(
 
     # Concatenate extracted strings with newline separators so the same
     # line-based regex scanning logic can run unmodified against binary
-    # content, while preserving byte offsets for reporting.
+    # content while retaining each string's byte offset and encoding width.
     joined = "\n".join(s for s, _ in strings_with_offsets)
-    text_findings = _scan_text_content(joined, str(pe_path), rules, enable_entropy)
+    source_locations = [
+        (offset, 2 if offset + 1 < len(data) and data[offset + 1] == 0 else 1)
+        for _, offset in strings_with_offsets
+    ]
+    text_findings = _scan_text_content(
+        joined,
+        str(pe_path),
+        rules,
+        enable_entropy,
+        source_locations=source_locations,
+    )
 
     # A build/product version number ("6.0.0.0", "19.0.3.0") is
     # structurally identical to a dotted-quad IPv4 address, and PE
@@ -854,7 +1189,10 @@ def _scan_pe_strings(
     if version_strings:
         text_findings = [
             f for f in text_findings
-            if not (f.rule_id == "hardcoded-ip" and f.evidence.strip() in version_strings)
+            if not (
+                f.rule_id == "hardcoded-ip"
+                and f.evidence.strip() in version_strings
+            )
         ]
 
     # Re-map line-number placeholders to byte offsets where possible, and
@@ -862,7 +1200,27 @@ def _scan_pe_strings(
     for f in text_findings:
         f.tags = list(set(f.tags + ["embedded-in-binary"]))
         f.description += " (Extracted from embedded strings inside a PE binary.)"
-        f.poc = _build_binary_poc(str(pe_path), f.evidence)
+        if f.rule_id == "hardcoded-ip":
+            offset_note = (
+                f"byte offset 0x{f.offset:X}"
+                if f.offset is not None
+                else "the matching embedded string"
+            )
+            f.poc = (
+                "Static verification:\n"
+                f"  1. Inspect {offset_note} in a PE/string viewer and review "
+                "the complete containing string.\n"
+                "  2. Review source or decompiled call sites to establish "
+                "whether the value is used as a network endpoint.\n"
+                "  3. A static address alone does not establish a connection "
+                "or vulnerability. Treat loopback values as local indicators; "
+                "do not probe external addresses without authorization."
+            )
+        else:
+            f.poc = _build_binary_poc(str(pe_path), f.evidence)
+        if f.line_number is not None:
+            f.extra["extracted_string_index"] = f.line_number
+            f.line_number = None
     findings.extend(text_findings)
 
     return findings
@@ -977,7 +1335,7 @@ def run(
                 content = read_text_safely(path)
                 if content:
                     file_findings = _scan_text_content(content, str(path), rules, enable_entropy)
-                    file_findings.extend(_config_intel_findings(path))
+                    file_findings.extend(_config_intel_findings(path, rules))
 
             elif kind == "pe" and scan_pe_strings and is_pe_file(path):
                 file_findings = _scan_pe_strings(path, rules, enable_entropy)
@@ -992,7 +1350,7 @@ def run(
                     content = ""
                 if content:
                     file_findings = _scan_text_content(content, str(path), rules, enable_entropy)
-                    file_findings.extend(_config_intel_findings(path))
+                    file_findings.extend(_config_intel_findings(path, rules))
                     for f in file_findings:
                         f.tags = list(set(f.tags + ["local-database"]))
 

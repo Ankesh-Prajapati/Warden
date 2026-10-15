@@ -14,14 +14,9 @@ from pathlib import Path
 
 from PySide6.QtGui import QColor, QPalette
 
-# Qt stylesheets have no equivalent of CSS ::after/content — a checked
-# QCheckBox::indicator only ever gets what's drawn via border/background
-# unless you give it an explicit `image:`. A base64 data: URI in url() was
-# tried first but proved unreliable in practice (renders inconsistently
-# across Qt versions/platforms) — a real file path is the documented,
-# reliably-working approach, so the checkmark ships as an actual PNG
-# asset instead.
-_CHECK_PNG_PATH = (Path(__file__).resolve().parent / "assets" / "check.png").as_posix()
+# Qt stylesheets need an image asset to draw a consistent checkbox checkmark.
+_CHECK_ICON_PATH = (Path(__file__).resolve().parent / "assets" / "check.svg").as_posix()
+_DROPDOWN_ICON_PATH = (Path(__file__).resolve().parent / "assets" / "chevron-down.svg").as_posix()
 
 DARK_PALETTE = {
     "BG": "#101113",
@@ -86,12 +81,40 @@ _current_mode = "dark"
 
 _QSS_TEMPLATE = """
 * {{
-    font-family: "Segoe UI", "Inter", sans-serif;
+    font-family: "Segoe UI";
     font-size: 13px;
     color: {TEXT};
 }}
 
 QMainWindow, QWidget#centralWidget {{
+    background-color: {BG};
+}}
+
+QWidget#appHeader {{
+    background-color: {PANEL};
+    border-bottom: 1px solid {BORDER};
+}}
+QLabel#brandTitle {{
+    color: {TEXT};
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: 0.8px;
+}}
+QLabel#brandSubtitle {{
+    color: {MUTED};
+    font-size: 11px;
+}}
+QLabel#headerContext {{
+    color: {ACCENT_SOFT};
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.7px;
+}}
+QWidget#configPanel {{
+    background-color: {PANEL};
+    border-right: 1px solid {BORDER};
+}}
+QWidget#resultsPanel {{
     background-color: {BG};
 }}
 
@@ -143,22 +166,26 @@ QDialog, QMessageBox {{
     background-color: {BG};
 }}
 
-QFrame#card, QGroupBox {{
+QFrame#card, QWidget#actionFooter {{
     background-color: {PANEL};
     border: 1px solid {BORDER};
-    border-radius: 10px;
+    border-radius: 7px;
 }}
 
 QGroupBox {{
+    background: transparent;
+    border: none;
+    border-top: 1px solid {BORDER};
+    border-radius: 0;
     margin-top: 8px;
-    padding: 34px 14px 14px 14px;
+    padding: 27px 4px 3px 4px;
     font-weight: 600;
 }}
 QGroupBox::title {{
     subcontrol-origin: padding;
     subcontrol-position: top left;
-    left: 14px;
-    top: 8px;
+    left: 4px;
+    top: 5px;
     padding: 0;
     color: {ACCENT_SOFT};
     font-size: 11px;
@@ -179,6 +206,29 @@ QLabel.caption {{
     color: {MUTED};
     font-size: 11px;
 }}
+QLabel#resultsTitle {{
+    font-size: 15px;
+    font-weight: 700;
+}}
+QLabel#emptyEyebrow {{
+    color: {ACCENT_SOFT};
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+}}
+QLabel#emptyTitle {{
+    font-size: 18px;
+    font-weight: 700;
+}}
+QLabel#emptyDescription {{
+    color: {MUTED};
+    font-size: 12px;
+}}
+QLabel#emptyScope {{
+    color: {ACCENT_SOFT};
+    font-family: "Consolas";
+    font-size: 11px;
+}}
 
 QLineEdit, QPlainTextEdit, QTextEdit {{
     background-color: {PANEL_ALT};
@@ -186,7 +236,7 @@ QLineEdit, QPlainTextEdit, QTextEdit {{
     border-radius: 6px;
     padding: 7px 9px;
     selection-background-color: {ACCENT};
-    font-family: "Consolas", "SFMono-Regular", monospace;
+    font-family: "Consolas";
     font-size: 12px;
 }}
 QLineEdit:focus, QPlainTextEdit:focus {{
@@ -208,6 +258,10 @@ QPushButton:disabled {{
     color: {MUTED};
     background-color: {PANEL};
     border-color: {BORDER};
+}}
+QPushButton:focus, QCheckBox:focus, QComboBox:focus, QSpinBox:focus {{
+    outline: none;
+    border-color: {ACCENT};
 }}
 
 QPushButton#primary {{
@@ -250,22 +304,32 @@ QWidget#dangerBox QLabel#dangerWarningText {{
 
 QCheckBox {{
     spacing: 8px;
-    padding: 3px 0;
+    padding: 4px 0;
+}}
+QCheckBox:hover {{
+    color: {ACCENT_SOFT};
 }}
 QCheckBox:disabled {{
     color: {MUTED};
 }}
 QCheckBox::indicator {{
-    width: 16px;
-    height: 16px;
-    border-radius: 4px;
+    width: 17px;
+    height: 17px;
+    border-radius: 5px;
     border: 1px solid {BORDER};
     background: {PANEL_ALT};
+}}
+QCheckBox::indicator:hover {{
+    border-color: {ACCENT};
 }}
 QCheckBox::indicator:checked {{
     background-color: {ACCENT};
     border-color: {ACCENT};
-    image: url("{_CHECK_PNG_PATH}");
+    image: url("{_CHECK_ICON_PATH}");
+}}
+QCheckBox::indicator:disabled {{
+    background-color: {PANEL};
+    border-color: {BORDER};
 }}
 
 QTableWidget {{
@@ -276,6 +340,7 @@ QTableWidget {{
     border-radius: 8px;
     selection-background-color: {ACCENT_DIM};
     selection-color: {TEXT};
+    outline: 0;
 }}
 QHeaderView::section {{
     background-color: {PANEL};
@@ -341,40 +406,108 @@ QToolBar {{
 
 QSplitter::handle {{
     background-color: {BORDER};
+    image: none;
+}}
+QSplitter::handle:horizontal {{
+    width: 5px;
+}}
+QSplitter::handle:vertical {{
+    height: 5px;
 }}
 
 QScrollBar:vertical {{
     background: transparent;
-    width: 10px;
+    width: 9px;
+    margin: 0;
 }}
 QScrollBar::handle:vertical {{
     background: {SCROLLBAR_HANDLE};
-    border-radius: 5px;
+    border-radius: 4px;
     min-height: 24px;
+    margin: 1px;
 }}
 QScrollBar::handle:vertical:hover {{
     background: {SCROLLBAR_HANDLE_HOVER};
 }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+    height: 0;
+    border: none;
+    background: none;
+}}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+    background: transparent;
+}}
 QScrollBar:horizontal {{
     background: transparent;
-    height: 10px;
+    height: 9px;
+    margin: 0;
 }}
 QScrollBar::handle:horizontal {{
     background: {SCROLLBAR_HANDLE};
-    border-radius: 5px;
+    border-radius: 4px;
     min-width: 24px;
+    margin: 1px;
+}}
+QScrollBar::handle:horizontal:hover {{
+    background: {SCROLLBAR_HANDLE_HOVER};
+}}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+    width: 0;
+    border: none;
+    background: none;
+}}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+    background: transparent;
 }}
 
 QComboBox {{
     background-color: {PANEL_ALT};
     border: 1px solid {BORDER};
     border-radius: 6px;
-    padding: 6px 10px;
+    padding: 5px 30px 5px 10px;
+    min-height: 20px;
+    selection-background-color: {ACCENT_DIM};
+}}
+QComboBox:hover {{
+    border-color: {BTN_BORDER};
+}}
+QComboBox:focus {{
+    border: 1px solid {ACCENT};
+}}
+QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 26px;
+    border-left: 1px solid {BORDER};
+    border-top-right-radius: 5px;
+    border-bottom-right-radius: 5px;
+    background: transparent;
+}}
+QComboBox::drop-down:hover {{
+    background-color: {BTN_HOVER_BG};
+}}
+QComboBox::down-arrow {{
+    image: url("{_DROPDOWN_ICON_PATH}");
+    width: 9px;
+    height: 6px;
 }}
 QComboBox QAbstractItemView {{
     background-color: {PANEL};
+    color: {TEXT};
     border: 1px solid {BORDER};
+    outline: 0;
+    padding: 4px;
     selection-background-color: {ACCENT_DIM};
+    selection-color: {TEXT};
+}}
+QComboBox QAbstractItemView::item {{
+    min-height: 28px;
+    padding: 4px 8px;
+    border-radius: 4px;
+}}
+QComboBox QAbstractItemView::item:hover {{
+    background-color: {ACCENT_DIM};
+    color: {TEXT};
 }}
 
 QToolTip {{
@@ -397,7 +530,11 @@ def get_palette(mode: str | None = None) -> dict:
 def build_qss(mode: str) -> str:
     """Render the QSS template with the given palette ("dark" or "light")."""
     palette = _PALETTES.get(mode, DARK_PALETTE)
-    return _QSS_TEMPLATE.format(_CHECK_PNG_PATH=_CHECK_PNG_PATH, **palette)
+    return _QSS_TEMPLATE.format(
+        _CHECK_ICON_PATH=_CHECK_ICON_PATH,
+        _DROPDOWN_ICON_PATH=_DROPDOWN_ICON_PATH,
+        **palette,
+    )
 
 
 def build_qpalette(mode: str) -> QPalette:
