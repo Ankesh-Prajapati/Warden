@@ -18,7 +18,7 @@ from desktop import theme
 from desktop.theme import SEVERITY_COLORS
 
 
-def _section(title: str, body: str) -> QWidget:
+def _section(title: str, body: str, max_height: int = 240) -> QWidget:
     box = QWidget()
     layout = QVBoxLayout(box)
     layout.setContentsMargins(0, 0, 0, 0)
@@ -34,7 +34,7 @@ def _section(title: str, body: str) -> QWidget:
     text = QPlainTextEdit(body or "-")
     text.setReadOnly(True)
     text.setMinimumHeight(70)
-    text.setMaximumHeight(240)
+    text.setMaximumHeight(max_height)
     layout.addWidget(text)
     return box
 
@@ -93,10 +93,13 @@ class FindingDialog(QDialog):
         )
         body_layout.addWidget(occurrence_heading)
         for index, occurrence in enumerate(occurrences, start=1):
-            body_layout.addWidget(self._occurrence_widget(index, occurrence))
+            # Evidence must be visible, not hidden behind a click: open the
+            # first few occurrences; long lists stay collapsed after that.
+            body_layout.addWidget(self._occurrence_widget(index, occurrence, expanded=index <= 5))
         body_layout.addWidget(_section("Remediation", f.get("remediation", "")))
-        if f.get("poc"):
-            body_layout.addWidget(_section("Proof of Concept", f["poc"]))
+        if f.get("poc") and len(occurrences) > 5:
+            # Collapsed occurrences: keep one complete PoC visible here.
+            body_layout.addWidget(_section("Proof of Concept (first occurrence)", f["poc"], max_height=420))
         if f.get("tags"):
             body_layout.addWidget(_section("Tags", ", ".join(f["tags"])))
         body_layout.addStretch()
@@ -111,7 +114,7 @@ class FindingDialog(QDialog):
         footer.addWidget(close_btn)
         outer.addLayout(footer)
 
-    def _occurrence_widget(self, index: int, occurrence: dict) -> QWidget:
+    def _occurrence_widget(self, index: int, occurrence: dict, expanded: bool = False) -> QWidget:
         palette = theme.get_palette()
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -157,7 +160,7 @@ class FindingDialog(QDialog):
         if context:
             details_layout.addWidget(_section("Code Context", context))
         if occurrence.get("poc"):
-            details_layout.addWidget(_section("Proof of Concept", occurrence["poc"]))
+            details_layout.addWidget(_section("Proof of Concept", occurrence["poc"], max_height=420))
         details.hide()
 
         def set_details_visible(checked: bool) -> None:
@@ -165,5 +168,6 @@ class FindingDialog(QDialog):
             expand.setText("Hide details" if checked else "Show details")
 
         expand.toggled.connect(set_details_visible)
+        expand.setChecked(expanded)
         layout.addWidget(details)
         return container

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import yaml
 
@@ -102,6 +102,14 @@ def _is_unquoted_vulnerable(image_path: str) -> bool:
         return False  # bare filename, no directory traversal possible
 
     return True
+
+
+def _unquoted_candidates(image_path: str) -> list[str]:
+    """The executables the SCM tries for an unquoted path, in order:
+    "C:\\Program Files\\Acme Soft\\svc.exe" -> C:\\Program.exe, C:\\Program Files\\Acme.exe."""
+    exe = _EXE_PATH_RE.match(image_path.strip()).group(1)
+    parts = exe.split(" ")
+    return [" ".join(parts[:i]) + ".exe" for i in range(1, len(parts))]
 
 
 def parse_services_from_reg_text(text: str, source_name: str) -> list[ServiceEntry]:
@@ -222,6 +230,8 @@ def _service_path_findings(entries: list[ServiceEntry]) -> list[Finding]:
     findings: list[Finding] = []
     for entry in entries:
         if _is_unquoted_vulnerable(entry.image_path):
+            candidates = _unquoted_candidates(entry.image_path)
+            candidate_dirs = list(dict.fromkeys(str(PureWindowsPath(c).parent) for c in candidates))
             findings.append(
                 Finding(
                     module="dll_hijack",
@@ -248,19 +258,18 @@ def _service_path_findings(entries: list[ServiceEntry]) -> list[Finding]:
                     poc=(
                         f"1. Confirm the vulnerable ImagePath directly:\n"
                         f"     reg query \"HKLM\\SYSTEM\\CurrentControlSet\\Services\\{entry.name}\" /v ImagePath\n"
-                        f"   (or inspect the registry export at {entry.source})\n\n"
-                        f"2. Identify a writable parent directory in the unquoted path. For "
-                        f"path '{entry.image_path}', the SCM will try, in order, e.g.:\n"
-                        f"     C:\\Program.exe\n"
-                        f"     C:\\Program Files\\Vuln.exe\n"
-                        f"     C:\\Program Files\\Vuln App\\svc.exe\n"
-                        f"   Check write access to each candidate parent directory:\n"
-                        f"     icacls \"C:\\Program Files\"\n"
-                        f"     icacls \"C:\\Program Files\\Vuln App\"\n\n"
-                        f"3. If a low-privileged account has write access to any candidate "
-                        f"path, place a proof-of-concept binary there (e.g. a benign binary "
-                        f"that writes to a log file) named to match the vulnerable prefix, "
-                        f"e.g. 'C:\\Program Files\\Vuln.exe'.\n\n"
+                        f"   (or inspect the registry export at {entry.source})\n"
+                        f"   Expected value (unquoted): {entry.image_path}\n\n"
+                        f"2. For this exact path the SCM tries these executables, in order, "
+                        f"before the real one:\n"
+                        + "".join(f"     {c}\n" for c in candidates)
+                        + "   Check write access to each candidate's parent directory:\n"
+                        # Quote only when needed: icacls "C:\" parses \" as an escaped quote.
+                        + "".join(f"     icacls {chr(34) + d + chr(34) if ' ' in d else d}\n" for d in candidate_dirs)
+                        + f"\n3. If a low-privileged account has write access to any of those "
+                        f"directories, place a benign proof-of-concept binary (e.g. one that "
+                        f"writes to a log file) at the matching candidate path, e.g. "
+                        f"'{candidates[-1]}'.\n\n"
                         f"4. Restart the service (requires appropriate rights, or wait for a "
                         f"scheduled restart/reboot) and confirm the planted binary executed:\n"
                         f"     net stop {entry.name} ; net start {entry.name}\n"

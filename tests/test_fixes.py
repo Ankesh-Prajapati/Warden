@@ -110,6 +110,35 @@ def test_binary_strings_no_cross_string_or_symbol_noise():
     assert not [f for f in hits if f.rule_id == "generic-password-assignment"]
 
 
+def test_symbol_check_is_linear_time():
+    import time
+    from core.secrets_module import _looks_like_symbol_name
+    start = time.time()
+    _looks_like_symbol_name("abcdefghijklmnopqrstuvwxyzabcdefghij" * 4 + "+")  # was >10s: froze the UI
+    assert time.time() - start < 0.1
+
+
+def test_pem_header_constants_and_cert_bodies_are_not_secrets():
+    from core.rules import load_rules
+    from core.secrets_module import _scan_text_content
+    rules = load_rules()
+    headers_only = "-----BEGIN RSA PRIVATE KEY-----\n-----END RSA PRIVATE KEY-----\n"
+    assert not [f for f in _scan_text_content(headers_only, "x.exe", rules, True) if f.rule_id == "pem-private-key"]
+    body = "MIIEpAIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n" * 4
+    real_key = "-----BEGIN RSA PRIVATE KEY-----\n" + body + "-----END RSA PRIVATE KEY-----\n"
+    assert [f for f in _scan_text_content(real_key, "k.pem", rules, True) if f.rule_id == "pem-private-key"]
+    cert = "-----BEGIN CERTIFICATE-----\n" + body.replace("MIIEp", "MIIC7") + "-----END CERTIFICATE-----\n"
+    assert not [f for f in _scan_text_content(cert, "c.pem", rules, True) if f.rule_id == "high-entropy-string"]
+
+
+def test_every_finding_has_specific_poc():
+    target = _target(SECRET_FILES)
+    result = run_scan(target, modules=["secrets"], extract_archives=False)
+    assert all(f.poc.strip() for f in result.findings)
+    aws = next(f for f in result.findings if f.rule_id == "aws-access-key-id")
+    assert "Select-String" in aws.poc and aws.evidence in aws.poc and "aws-access-key-id" not in aws.poc
+
+
 def test_winverifytrust_detects_tampering():
     if sys.platform != "win32":
         return

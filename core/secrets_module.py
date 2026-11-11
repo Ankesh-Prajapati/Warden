@@ -247,8 +247,47 @@ def _looks_like_code_identifier(evidence: str) -> bool:
     return len(segments) >= 3 and all(s.isalpha() or s.isdigit() for s in segments)
 
 
+_PEM_END = "-----END"
+_PEM_BEGIN = "-----BEGIN"
+
+
+def _has_pem_body(content: str, header_end: int) -> bool:
+    """True if real base64 key material follows a PEM BEGIN header."""
+    window = content[header_end:header_end + 600]
+    end = window.find(_PEM_END)
+    body = window if end < 0 else window[:end]
+    return len(re.sub(r"[^A-Za-z0-9+/=]", "", body)) >= 64
+
+
+def _inside_pem_block(content: str, offset: int, lookback: int = 8000) -> bool:
+    """True if `offset` sits between a PEM BEGIN line and its END line."""
+    begin = content.rfind(_PEM_BEGIN, max(0, offset - lookback), offset)
+    return begin >= 0 and content.find(_PEM_END, begin, offset) < 0
+
+
+def _looks_like_bignum_constant(candidate: str) -> bool:
+    """Long uppercase-hex strings in binaries are big-number tables (elliptic
+    curve parameters, DH primes) from crypto libraries, not credentials —
+    generated keys/tokens are conventionally lowercase hex or base64."""
+    return len(candidate) >= 48 and bool(re.fullmatch(r"[0-9A-F]+", candidate))
+
+
+def _looks_like_case_paired_alphabet(candidate: str) -> bool:
+    """Format-specifier / alphabet tables like "aAbBcCdDeFgGhH..." (strftime
+    flags): letters only, built from adjacent same-letter case pairs. In
+    random text two neighbours are the same letter ~4% of the time."""
+    if not candidate.isalpha() or len(candidate) < 16:
+        return False
+    pairs = sum(a.lower() == b.lower() and a != b for a, b in zip(candidate, candidate[1:]))
+    return pairs >= 0.25 * len(candidate)
+
+
 _SYMBOL_RUN_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
-_SYMBOL_CHARSET_RE = re.compile(r"(?:[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+|[_\-.])+")
+# Flat character class only: a nested form like (?:[a-z]+|...)+ backtracks
+# exponentially on long non-matching strings (a 28-char base64 line took
+# >10s and froze the desktop UI). "/" allowed so URL paths like
+# "org/2001/XMLSchema-instance" are judged by their word runs too.
+_SYMBOL_CHARSET_RE = re.compile(r"[A-Za-z0-9_\-./]+")
 
 
 def _looks_like_symbol_name(candidate: str) -> bool:
@@ -373,6 +412,7 @@ def _entropy_candidate_has_benign_context(
         or _looks_like_hash_or_thumbprint(candidate)
         or _looks_like_crypto_algorithm_identifier(candidate)
         or _looks_like_deterministic_hex_table(candidate)
+        or _looks_like_case_paired_alphabet(candidate)
     ):
         return True
 
@@ -672,7 +712,6 @@ def _jwt_findings(
             evidence=token,
             description="A JSON Web Token was found and decoded successfully. Embedded JWTs can grant direct access until expiry and may expose issuer, audience, and role claims.",
             remediation="Remove embedded JWTs, rotate/revoke the token, and issue short-lived tokens at runtime through an authenticated flow.",
-            poc=_build_text_poc(file_path, line_no, "jwt-token", token),
             line_number=line_no,
             column_number=_source_column_number(content, match.start()),
             offset=_binary_byte_offset(content, match.start(), source_locations),
@@ -726,7 +765,6 @@ def _db_uri_findings(
             evidence=uri,
             description="A database connection string was found and parsed into host, port, database, username, password, and SSL-related fields.",
             remediation="Move database connection settings to a secret store, rotate exposed credentials, and require TLS for database connections.",
-            poc=_build_text_poc(file_path, line_no, "database-connection-string", uri),
             line_number=line_no,
             column_number=_source_column_number(content, match.start()),
             offset=_binary_byte_offset(content, match.start(), source_locations),
@@ -798,61 +836,67 @@ def _correlate_related_secrets(findings: list[Finding]) -> list[Finding]:
     return [f for f in findings if f.fingerprint() not in consumed] + correlated
 
 
-def _build_text_poc(file_path: str, line_no: int, rule_id: str, evidence: str) -> str:
-    """Build a reproducible, analyst-ready PoC block for a text/config-file match."""
-    filename = Path(file_path).name
-    return (
-        f"1. Open the file directly:\n"
-        f"     {file_path}\n"
-        f"   and go to line {line_no}.\n\n"
-        f"2. Reproduce the detection independently:\n"
-        f"   Windows (PowerShell):\n"
-        f"     Select-String -Path \"{file_path}\" -Pattern \"{rule_id}\" -SimpleMatch:$false\n"
-        f"   Linux/macOS:\n"
-        f"     grep -n -i '{rule_id}' \"{file_path}\"\n\n"
-        f"3. Confirm exploitability: if this is a live/production credential, attempt "
-        f"authentication against the associated service using the value found at "
-        f"line {line_no} of {filename} (in an authorized test window only) to "
-        f"confirm it is active before including it as a confirmed finding rather "
-        f"than a potential one.\n\n"
-        f"4. Matched evidence: {evidence}\n\n"
-        f"5. Evidence capture for the report: screenshot the line in context."
-    )
+def _ps_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
 
-def _build_entropy_poc(file_path: str, line_no: int, evidence: str) -> str:
-    return (
-        f"1. Open {file_path} at line {line_no} and manually inspect the "
-        f"high-entropy token in context — entropy scoring flags candidates, "
-        f"it does not confirm they are secrets.\n\n"
-        f"2. Cross-reference the token format against known credential patterns "
-        f"(length, charset, prefix) to identify the likely secret type (API key, "
-        f"session token, encryption key, etc.).\n\n"
-        f"3. If it resembles a live credential, test it against the likely "
-        f"issuing service in an authorized test window to confirm activity "
-        f"before escalating severity in the final report.\n\n"
-        f"4. Evidence for this finding: {evidence}"
-    )
+def _sh_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\\''") + "'"
 
 
-def _build_binary_poc(file_path: str, evidence: str) -> str:
-    filename = Path(file_path).name
-    return (
-        f"1. Extract printable strings from the binary directly to confirm "
-        f"independently:\n"
-        f"   Windows (Sysinternals strings.exe):\n"
-        f"     strings64.exe -n 6 \"{file_path}\"\n"
-        f"   Linux:\n"
-        f"     strings -n 6 \"{file_path}\"\n\n"
-        f"2. Open {filename} in a PE viewer (CFF Explorer, Detect It Easy, or "
-        f"IDA/Ghidra) and locate the string in the resource/data section to "
-        f"confirm it is not dead code or a leftover debug string.\n\n"
-        f"3. If confirmed live, treat this the same as a config-file secret: "
-        f"rotate the credential and remove it from the compiled binary — "
-        f"hardcoded strings in compiled code are trivially recoverable with "
-        f"basic reverse-engineering tools regardless of packing.\n\n"
-        f"4. Matched evidence: {evidence}"
-    )
+def _indent(text: str, prefix: str = "     ") -> str:
+    return "\n".join(prefix + line for line in (text or "(not available)").splitlines())
+
+
+def _evidence_poc(f: Finding, file_path: str, source_locations: list[tuple[int, int]] | None) -> str:
+    """
+    Reproduction steps built from the finding's real location, so a tester
+    can show the evidence without re-deriving anything: the exact byte
+    offset + encoding (binaries) or a literal search for the matched text
+    (text files), the surrounding context, and the full evidence.
+    """
+    first = (f.evidence.splitlines() or [""])[0][:200]
+    context = f.extra.get("context", "")
+    if source_locations is not None and f.offset is not None:
+        index = (f.line_number or 1) - 1
+        width = source_locations[index][1] if 0 <= index < len(source_locations) else 1
+        nbytes = max(len(first), 1) * width
+        encoding = "Unicode" if width == 2 else "ASCII"
+        locate = (
+            f"1. Show the evidence at its exact location (file offset 0x{f.offset:X}, "
+            f"{'UTF-16LE' if width == 2 else 'ASCII'}, {nbytes} bytes):\n"
+            f"   PowerShell:\n"
+            f"     $b = [IO.File]::ReadAllBytes((Resolve-Path {_ps_quote(file_path)})); "
+            f"[Text.Encoding]::{encoding}.GetString($b, 0x{f.offset:X}, {nbytes})\n"
+            f"   Linux/macOS:\n"
+            f"     xxd -s 0x{f.offset:X} -l {nbytes} {_sh_quote(file_path)}\n"
+            f"   Expected output: {first}\n\n"
+            f"2. Neighbouring strings in the binary (string index @ file offset):\n{_indent(context)}"
+        )
+    else:
+        where = f"line {f.line_number}" + (f", column {f.column_number}" if f.column_number else "")
+        locate = (
+            f"1. Show the evidence in the file ({where}):\n"
+            f"   PowerShell:\n"
+            f"     Select-String -Path {_ps_quote(file_path)} -SimpleMatch -Pattern {_ps_quote(first)}\n"
+            f"   Linux/macOS:\n"
+            f"     grep -nF -- {_sh_quote(first)} {_sh_quote(file_path)}\n"
+            f"   Expected: a match on line {f.line_number}.\n\n"
+            f"2. Code context (>> marks the matching line):\n{_indent(context)}"
+        )
+    if f.rule_id == "high-entropy-string":
+        verify = (
+            "3. Entropy flags candidates, it does not prove a secret: compare the value's "
+            "length, charset and prefix with known credential formats and check how the "
+            "surrounding code uses it before reporting it as a credential."
+        )
+    else:
+        verify = (
+            "3. Confirm it is live: if this looks like a production credential, test it "
+            "against the issuing service in an authorized test window, then report it as "
+            "confirmed rather than potential. Capture the step 1 output as evidence."
+        )
+    return f"{locate}\n\n{verify}\n\n4. Full matched evidence:\n{_indent(f.evidence)}"
 
 
 def _build_permission_poc(file_path: str) -> str:
@@ -933,6 +977,11 @@ def _scan_text_content(
                 # match spanning lines glues unrelated strings together
                 # (e.g. the UI labels "Enter password:" + "Reenter password:").
                 continue
+            if rule.id == "pem-private-key" and not _has_pem_body(content, match.end()):
+                # Header constant only (e.g. OpenSSL's PEM label table:
+                # "-----BEGIN RSA PRIVATE KEY-----" then "-----END ...")
+                # — no key material follows, so nothing is exposed.
+                continue
             if _looks_like_regex_definition(evidence_raw):
                 # This match is a regex pattern literal (e.g. a rule
                 # definition inside a rules/*.yaml-style file), not an
@@ -983,7 +1032,7 @@ def _scan_text_content(
                 "variables injected at runtime, and rotate the exposed "
                 "credential immediately."
             )
-            poc = _build_text_poc(file_path, line_no, rule.id, evidence_raw)
+            poc = ""  # filled from the final location by _evidence_poc
             extra = {
                 "context": _extract_context(
                     lines, line_no, rules=rules, source_locations=source_locations
@@ -1067,7 +1116,13 @@ def _scan_text_content(
                 continue
             if _entropy_candidate_has_benign_context(candidate, content, offset):
                 continue
-            if source_locations is not None and _looks_like_symbol_name(candidate):
+            if source_locations is not None and (
+                _looks_like_symbol_name(candidate) or _looks_like_bignum_constant(candidate)
+            ):
+                continue
+            if _inside_pem_block(content, offset):
+                # Certificate / public-key body lines are public data, and a
+                # private-key body is already reported by pem-private-key.
                 continue
             line_no = content.count("\n", 0, offset) + 1
             findings.append(
@@ -1095,7 +1150,6 @@ def _scan_text_content(
                     offset=_binary_byte_offset(content, offset, source_locations),
                     tags=["entropy", "generic"],
                     confidence="Low",  # entropy hits are inherently noisier
-                    poc=_build_entropy_poc(file_path, line_no, candidate),
                     extra={
                         "context": _extract_context(
                             lines, line_no, rules=rules, source_locations=source_locations
@@ -1104,6 +1158,9 @@ def _scan_text_content(
                 )
             )
 
+    for f in findings:
+        if f.rule_id != "hardcoded-ip":  # IP findings carry their own static-review PoC
+            f.poc = _evidence_poc(f, file_path, source_locations)
     return findings
 
 
@@ -1263,8 +1320,6 @@ def _scan_pe_strings(
                 "or vulnerability. Treat loopback values as local indicators; "
                 "do not probe external addresses without authorization."
             )
-        else:
-            f.poc = _build_binary_poc(str(pe_path), f.evidence)
         if f.line_number is not None:
             f.extra["extracted_string_index"] = f.line_number
             f.line_number = None

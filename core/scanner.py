@@ -20,6 +20,7 @@ from core.logging_config import get_logger
 from core.models import Finding, ScanMetadata, Severity
 from core.path_utils import normalize_diagnostic_paths, normalize_target_path, scan_root
 from core.plugin_system import load_python_detectors, run_python_detectors
+from core.poc import fill_missing_pocs
 
 logger = get_logger("scanner")
 
@@ -390,6 +391,7 @@ def run_scan(
                 # Also runs on cancel, so temp extraction dirs never leak.
                 cleanup_extraction(extraction)
 
+    fill_missing_pocs(all_findings)  # every finding ships with reproduction steps
     metadata.files_scanned = len(scanned_file_paths)
     metadata.extracted_files_scanned = len(extracted_file_paths)
     metadata.input_files_scanned = len(

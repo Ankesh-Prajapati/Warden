@@ -419,7 +419,9 @@ def _dotnet_obfuscation_finding(
 # ---------------------------------------------------------------------------
 
 def _pdb_leak_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
-    if not pe_info.pdb_path:
+    # A bare "Launcher.pdb" (e.g. built with /PDBALTPATH) reveals nothing —
+    # only a path with directories leaks build-machine details.
+    if not pe_info.pdb_path or not re.search(r"[\\/]", pe_info.pdb_path):
         return None
 
     return Finding(
@@ -575,7 +577,7 @@ def _artifact_findings(pe_path: Path, strings: list[str]) -> list[Finding]:
                 title=f"Extracted {name.replace('-', ' ')} indicators",
                 severity=Severity.INFO,
                 file_path=str(pe_path),
-                evidence=", ".join(matches[:10]),
+                evidence=", ".join(matches),
                 description="Static string extraction found indicators useful for reverse engineering and attack-surface review.",
                 remediation="Review extracted indicators for unintended endpoints, internal paths, IPC channels, registry persistence, or environment-specific leakage.",
                 tags=["re-exposure", "strings", name],
@@ -591,7 +593,7 @@ def _artifact_findings(pe_path: Path, strings: list[str]) -> list[Finding]:
             title="Interesting strings extracted from binary",
             severity=Severity.INFO,
             file_path=str(pe_path),
-            evidence=", ".join(interesting[:10]),
+            evidence=", ".join(interesting),
             description="Strings with security-relevant keywords were found in the binary.",
             remediation="Review these strings to confirm they do not leak credentials, debug behavior, or internal authorization logic.",
             tags=["re-exposure", "strings"],

@@ -170,3 +170,21 @@ known_system_dlls:
   - msjint40.dll
   - dao350.dll
   - dao360.dll
+  # Graphics, input, media, trust and other in-box Windows DLLs
+  - tbs.dll
+  - d2d1.dll
+  - dwrite.dll
+  - wintrust.dll
+  - dinput8.dll
+  - d3d12.dll
+  - xinput1_4.dll
+  - opengl32.dll
+  - mfplat.dll
+  - avrt.dll
+  - d3dcompiler_47.dll
+  - dcomp.dll
+  - mf.dll
+  - mfreadwrite.dll
+  - dsound.dll
+  - xinput9_1_0.dll
+  - wevtapi.dll
