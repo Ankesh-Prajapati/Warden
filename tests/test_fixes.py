@@ -139,6 +139,13 @@ def test_every_finding_has_specific_poc():
     assert "Select-String" in aws.poc and aws.evidence in aws.poc and "aws-access-key-id" not in aws.poc
 
 
+def test_reports_grouped_by_application_name():
+    from desktop.main_window import _app_name
+    assert _app_name(r"C:\Program Files\Rockstar Games\Launcher\Launcher.exe") == "Launcher"
+    assert _app_name(r"C:\Apps\Acme Suite") == "Acme Suite"
+    assert _app_name(r"C:\x\bad<name>.dll") == "bad_name_"
+
+
 def test_winverifytrust_detects_tampering():
     if sys.platform != "win32":
         return

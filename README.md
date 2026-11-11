@@ -91,7 +91,8 @@ malware analysis.
 - Multithreaded scanning where appropriate.
 - Custom YARA rules for reverse-engineering scans.
 - Python detector plugin hooks for trusted custom modules.
-- Desktop reports in `reports/` next to the app, falling back to
+- Desktop reports grouped per scanned application —
+  `reports/<AppName>/<AppName>_report_<timestamp>.html/.json` — next to the app, falling back to
   `~/.warden/reports` when the install folder is read-only (e.g. Program Files).
 
 <h2 id="installation" align="center">Installation</h2>
@@ -187,7 +188,7 @@ The desktop app supports:
 - Light and dark theme selection from the Theme menu.
 - Filterable, grouped findings table.
 - Double-click finding details with evidence, context, remediation, and PoC.
-- HTML and JSON reports written to the application-local `reports/` folder.
+- HTML and JSON reports written to `reports/<AppName>/` (one folder per scanned application).
 - The findings table, detail view, HTML report, and JSON export display complete
   extracted evidence by default. Treat local reports as potentially sensitive.
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import sys
 import traceback
 import webbrowser
@@ -97,6 +98,14 @@ MODULE_TOOLTIPS = {
 FILE_EXTENSIONS = (".exe", ".dll", ".sys", ".ocx")
 
 _TOOLTIP_MAX_OCCURRENCES = 20
+
+
+def _app_name(target_path: str) -> str:
+    """Report folder name for a scan target: the file name without extension
+    ("Launcher.exe" -> "Launcher") or the folder name, made filesystem-safe."""
+    p = Path(target_path)
+    name = p.stem if p.suffix else p.name
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(" .") or "scan"
 
 
 def _plain_tooltip(text: str) -> str:
@@ -1138,9 +1147,12 @@ class MainWindow(QMainWindow):
     # Reports
     # ------------------------------------------------------------------
     def _write_reports(self, result) -> None:
+        # One folder per scanned application: reports/<App>/<App>_report_<time>.*
         job_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-        html_path = REPORTS_DIR / f"warden_report_{job_id}.html"
-        json_path = REPORTS_DIR / f"warden_report_{job_id}.json"
+        app_dir = REPORTS_DIR / _app_name(result.metadata.target_path)
+        app_dir.mkdir(parents=True, exist_ok=True)
+        html_path = app_dir / f"{app_dir.name}_report_{job_id}.html"
+        json_path = app_dir / f"{app_dir.name}_report_{job_id}.json"
         generate_html_report(result, html_path)
         # default=str: config values can be dates/bytes (YAML, TOML, plist).
         json_path.write_text(json.dumps(result.to_dict(), indent=2, default=str), encoding="utf-8")
