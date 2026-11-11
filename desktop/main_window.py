@@ -59,7 +59,23 @@ def _application_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-REPORTS_DIR = _application_root() / "reports"
+def _reports_dir() -> Path:
+    """Reports next to the app when writable (source checkout / portable
+    install), else per-user — an MSI install under Program Files is
+    read-only for standard users and used to crash the app on startup."""
+    for candidate in (_application_root() / "reports", Path.home() / ".warden" / "reports"):
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write_test"
+            probe.write_text("", encoding="utf-8")
+            probe.unlink()
+            return candidate
+        except OSError:
+            continue
+    raise OSError("No writable reports directory available")
+
+
+REPORTS_DIR = _reports_dir()
 
 COMMON_MODULES = [
     ("secrets", "Secrets && config"),
@@ -80,6 +96,15 @@ MODULE_TOOLTIPS = {
 
 FILE_EXTENSIONS = (".exe", ".dll", ".sys", ".ocx")
 
+_TOOLTIP_MAX_OCCURRENCES = 20
+
+
+def _plain_tooltip(text: str) -> str:
+    """Qt renders tooltips as rich text when they *look* like HTML, and
+    evidence comes straight from the scanned (untrusted) target — escape
+    it, same as the log pane does."""
+    return "<qt>" + html.escape(text).replace("\n", "<br>") + "</qt>"
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -92,8 +117,6 @@ class MainWindow(QMainWindow):
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
 
-        REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-
         self.settings = WardenSettings()
         self.controller = ScanController()
         self.controller.progress.connect(self._on_progress)
@@ -105,6 +128,8 @@ class MainWindow(QMainWindow):
         self._vt_test_thread: QThread | None = None
         self._vt_test_worker: VTTestWorker | None = None
         self._current_result = None
+        self._last_findings = None
+        self._last_target_path: str | None = None
         self._current_report_html: Path | None = None
         self._current_report_json: Path | None = None
         self._elapsed_timer = QTimer(self)
@@ -267,7 +292,7 @@ class MainWindow(QMainWindow):
         # set_theme(); re-populate the table so already-rendered rows pick
         # up the new palette immediately instead of only on the next scan.
         if getattr(self, "_last_findings", None) is not None:
-            self._populate_table(self._last_findings)
+            self._populate_table(self._last_findings, self._last_target_path)
 
     def _show_about(self) -> None:
         QMessageBox.about(
@@ -780,6 +805,8 @@ class MainWindow(QMainWindow):
         self.settings.vt_max_lookups = self.vt_max_lookups_input.value()
 
     def closeEvent(self, event) -> None:
+        # A still-running scan thread destroyed at exit crashes the process.
+        self.controller.shutdown()
         try:
             self._save_settings_from_ui()
             self.settings.save_geometry(self.saveGeometry())
@@ -1115,7 +1142,8 @@ class MainWindow(QMainWindow):
         html_path = REPORTS_DIR / f"warden_report_{job_id}.html"
         json_path = REPORTS_DIR / f"warden_report_{job_id}.json"
         generate_html_report(result, html_path)
-        json_path.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
+        # default=str: config values can be dates/bytes (YAML, TOML, plist).
+        json_path.write_text(json.dumps(result.to_dict(), indent=2, default=str), encoding="utf-8")
         self._current_report_html = html_path
         self._current_report_json = json_path
         self._append_log(f"Report written: {html_path.name}", "ok")
@@ -1142,8 +1170,10 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _populate_table(self, findings: list[Finding], target_path: str | None = None) -> None:
         self._last_findings = findings
+        self._last_target_path = target_path
         root = str(scan_root(target_path)) if target_path else None
-        grouped = group_findings(findings, scan_root=root)
+        # Most severe first, same order as the HTML report.
+        grouped = group_findings(sorted(findings, key=lambda f: -f.severity.weight), scan_root=root)
         self.table.setRowCount(0)
         self.table.setRowCount(len(grouped))
         if grouped:
@@ -1176,7 +1206,7 @@ class MainWindow(QMainWindow):
                 evidence_preview += f" (+{affected - 1} more)"
             evidence_item = QTableWidgetItem(evidence_preview)
             evidence_details = []
-            for occurrence in occurrences:
+            for occurrence in occurrences[:_TOOLTIP_MAX_OCCURRENCES]:
                 location = occurrence.get("file_path") or occurrence.get("location", "")
                 if occurrence.get("offset") is not None:
                     location += f" (offset 0x{occurrence['offset']:X})"
@@ -1192,12 +1222,16 @@ class MainWindow(QMainWindow):
                 context = occurrence.get("context") or (occurrence.get("extra") or {}).get("context")
                 if context:
                     evidence_details.append(f"Context: {context}")
-            evidence_item.setToolTip("\n\n".join(evidence_details))
-            title_item.setToolTip(f["title"])
+            if len(occurrences) > _TOOLTIP_MAX_OCCURRENCES:
+                evidence_details.append(
+                    f"+{len(occurrences) - _TOOLTIP_MAX_OCCURRENCES} more — double-click for details"
+                )
+            evidence_item.setToolTip(_plain_tooltip("\n\n".join(evidence_details)))
+            title_item.setToolTip(_plain_tooltip(f["title"]))
             affected_item.setToolTip(
                 f"{affected} distinct occurrence{'s' if affected != 1 else ''}"
             )
-            file_item.setToolTip(top_location)
+            file_item.setToolTip(_plain_tooltip(top_location))
 
             self.table.setItem(row, 0, sev_item)
             self.table.setItem(row, 1, title_item)
@@ -1209,6 +1243,7 @@ class MainWindow(QMainWindow):
             affected_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             module_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.table.setRowHeight(row, 34)
+        self._apply_filter()  # keep the analyst's active filters after a refresh
 
     def _apply_filter(self) -> None:
         severity = self.severity_filter.currentText()

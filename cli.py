@@ -32,7 +32,7 @@ def cli():
 
 @cli.command()
 @click.argument("target", type=click.Path(exists=True, file_okay=True, dir_okay=True))
-@click.option("--output", "-o", default="secretsentry_report.html", help="HTML report output path.")
+@click.option("--output", "-o", default="warden_report.html", help="HTML report output path.")
 @click.option("--json", "json_output", default=None, help="Optional path to also write raw JSON findings.")
 @click.option("--rules-dir", default=None, type=click.Path(exists=True, file_okay=False), help="Override rule pack directory.")
 @click.option("--no-entropy", is_flag=True, help="Disable entropy-based secret detection.")
@@ -154,7 +154,8 @@ def scan(target, output, json_output, rules_dir, no_entropy, no_pe_strings, modu
     if json_output:
         json_path = Path(json_output)
         json_path.parent.mkdir(parents=True, exist_ok=True)
-        json_content = json.dumps(result.to_dict(), indent=2)
+        # default=str: config values can be dates/bytes (YAML, TOML, plist).
+        json_content = json.dumps(result.to_dict(), indent=2, default=str)
         json_path.write_text(json_content, encoding="utf-8")
         console.print(f"[bold green]JSON findings written:[/bold green] {json_output}")
 

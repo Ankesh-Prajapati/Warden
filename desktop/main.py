@@ -25,7 +25,9 @@ logger = get_logger("desktop")
 # embedded sizes; .ico is used everywhere (not just Windows) since Qt
 # reads it fine cross-platform and it's the one file that covers every
 # resolution in one asset.
-ICON_PATH = Path(__file__).resolve().parent.parent / "assets" / "logo.ico"
+# In the one-file EXE this script runs from the bundle root (sys._MEIPASS),
+# not from desktop/, so __file__'s grandparent would point outside the bundle.
+ICON_PATH = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT)) / "assets" / "logo.ico"
 
 
 def _claim_windows_taskbar_identity() -> None:

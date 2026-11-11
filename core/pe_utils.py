@@ -4,10 +4,11 @@ Shared PE (Portable Executable) parsing helpers, built on `pefile`.
 Used by:
 - secrets_module: extract embedded ASCII/UTF-16 strings from .exe/.dll for
   secret scanning
-- dll_hijack_module (later): import table enumeration
-- re_exposure_module (later): section entropy / packer signals, PDB path leaks
+- dll_hijack_module: import table enumeration
+- re_exposure_module: section entropy / packer signals, PDB path leaks
+- signature_module: Authenticode security directory
 
-Kept in one place so every module parses each PE file only once per scan.
+Kept in one place so all PE parsing logic lives together.
 """
 from __future__ import annotations
 
@@ -190,7 +191,9 @@ def get_security_mitigations(path: Path) -> MitigationInfo:
         return info
 
     info.is_valid_pe = True
-    info.is_64bit = pe.FILE_HEADER.Machine == pefile.MACHINE_TYPE.get("IMAGE_FILE_MACHINE_AMD64", 0x8664)
+    # PE32+ optional header (0x20B) covers AMD64 *and* ARM64; checking only
+    # the AMD64 machine type sent ARM64 binaries down the 32-bit SafeSEH path.
+    info.is_64bit = pe.OPTIONAL_HEADER.Magic == 0x20B
 
     chars = pe.OPTIONAL_HEADER.DllCharacteristics
     info.aslr_dynamic_base = bool(chars & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE)
@@ -199,14 +202,18 @@ def get_security_mitigations(path: Path) -> MitigationInfo:
     info.no_seh = bool(chars & IMAGE_DLLCHARACTERISTICS_NO_SEH)
     info.cfg_guard = bool(chars & IMAGE_DLLCHARACTERISTICS_GUARD_CF)
 
-    if not info.is_64bit:
+    if not info.is_64bit and info.no_seh:
+        # NO_SEH: the image has no structured exception handlers at all
+        # (e.g. every IL-only .NET assembly), so SafeSEH is not applicable.
+        info.safeseh_present = None
+    elif not info.is_64bit:
         # SafeSEH is signaled by a populated SEHandlerTable/Count in the load
-        # config directory, and requires NO_SEH to NOT be set.
+        # config directory.
         try:
             if hasattr(pe, "DIRECTORY_ENTRY_LOAD_CONFIG"):
                 load_config = pe.DIRECTORY_ENTRY_LOAD_CONFIG.struct
                 handler_count = getattr(load_config, "SEHandlerCount", 0)
-                info.safeseh_present = (handler_count > 0) and not info.no_seh
+                info.safeseh_present = handler_count > 0
             else:
                 # No load config directory at all: treat as SafeSEH absent
                 # rather than "unknown" for 32-bit binaries, since modern
@@ -219,8 +226,12 @@ def get_security_mitigations(path: Path) -> MitigationInfo:
     return info
 
 
-def parse_pe(path: Path) -> PEInfo:
-    """Parse a PE file for imports, sections, PDB path, and cert presence."""
+def parse_pe(path: Path, with_section_entropy: bool = False) -> PEInfo:
+    """Parse a PE file for imports, sections, PDB path, and cert presence.
+
+    Section entropy is the most expensive part of the parse and only the
+    re_exposure packer check uses it, so it is computed on request only
+    (otherwise each section's "entropy" is None)."""
     info = PEInfo(path=str(path), is_valid_pe=False)
 
     if pefile is None:
@@ -294,7 +305,7 @@ def parse_pe(path: Path) -> PEInfo:
         info.sections.append(
             {
                 "name": name,
-                "entropy": round(section.get_entropy(), 3),
+                "entropy": round(section.get_entropy(), 3) if with_section_entropy else None,
                 "raw_size": section.SizeOfRawData,
                 "virtual_size": section.Misc_VirtualSize,
             }

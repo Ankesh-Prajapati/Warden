@@ -91,12 +91,16 @@ malware analysis.
 - Multithreaded scanning where appropriate.
 - Custom YARA rules for reverse-engineering scans.
 - Python detector plugin hooks for trusted custom modules.
-- Application-local desktop reports in `reports/`, suitable for installer
-  packaging.
+- Desktop reports in `reports/` next to the app, falling back to
+  `~/.warden/reports` when the install folder is read-only (e.g. Program Files).
 
 <h2 id="installation" align="center">Installation</h2>
 
-Requires **Python 3.10+**.
+**Standalone Windows app (no Python needed):** download `Warden.exe` from the
+[latest release](https://github.com/Ankesh-Prajapati/Warden/releases/latest)
+and double-click it. Install 7-Zip if you want installer/archive extraction.
+
+**From source** — requires **Python 3.10+**.
 
 **Windows:**
 
@@ -122,11 +126,11 @@ $ pip install -r requirements.txt
 
 | Tool | Purpose |
 |---|---|
-| `osslsigncode` | Deeper Authenticode digest verification |
+| `osslsigncode` | Authenticode digest verification on Linux/macOS (on Windows the built-in WinVerifyTrust API is used, no install needed) |
 | `readelf` | Deeper ELF hardening/library analysis on Linux |
 | `otool`, `codesign`, `spctl` | Deeper Mach-O signing/notarization analysis on macOS |
 | `yara-python` | Listed in `requirements.txt`; custom YARA scans are skipped gracefully if unavailable |
-| `7z` (7-Zip / p7zip-full) | Installer/archive extraction (see below) — extraction is silently skipped if not found, never a hard failure |
+| `7z` (7-Zip / p7zip-full) | Installer/archive extraction (see below) — found on PATH or in `Program Files\7-Zip`; skipped with a note if not found, never a hard failure |
 
 <h2 id="quick-start" align="center">Quick Start</h2>
 
@@ -243,11 +247,14 @@ inside — none of that would have been scanned without this step. Findings
 from extracted content are tagged `extracted-content` and note the
 originating archive in `extra["extracted_from"]`.
 
-Requires `7z` (7-Zip / p7zip-full) on PATH — silently skipped if not
-found, never a hard failure; the outer file is still scanned exactly as
-before. Bounded by nesting depth, a total-extracted-size cap (zip-bomb
-protection), and a per-archive candidate cap in directory scans, so a
-pathological archive can't blow up scan time unbounded.
+Requires `7z` (7-Zip / p7zip-full) on PATH or in `Program Files\7-Zip` —
+skipped with a note if not found, never a hard failure; the outer file is
+still scanned exactly as before. Bounded by nesting depth, a
+total-extracted-size cap (zip-bomb protection, checked against the archive
+listing *before* anything is written), and a per-archive candidate cap in
+directory scans. When 7-Zip opens a plain PE, only nested archives found
+inside it are scanned — raw section dumps are discarded because the PE
+string scan already covers them.
 
 
 
@@ -282,11 +289,7 @@ Windows reverse-engineering checks include:
 - Embedded manifest analysis including `requestedExecutionLevel`,
   `autoElevate`, `uiAccess`, and related privilege settings.
 - Imported-DLL dependency graph data included in report context.
-- Phantom DLL imports include a generated, ready-to-compile proof-of-concept:
-  a proxy DLL source stubbing the exact functions the target binary
-  actually imports (from the real import table, not guessed), a build
-  script for MinGW/MSVC, and step-by-step instructions to confirm the
-  hijack is real (a benign `DllMain` marker, not an exploit payload).
+- Unbundled DLL imports are reported with static verification steps.
 
 <h2 id="signature-analysis" align="center">Signature Analysis</h2>
 
@@ -297,10 +300,16 @@ The signature module checks Windows PE Authenticode metadata:
 - Self-signed certificates.
 - Weak signature algorithms.
 - Certificate chain summary where available.
-- Timestamp presence.
-- Publisher consistency across binaries.
+- Timestamp presence (countersignature / RFC 3161 token in the signature).
+- Publisher consistency across binaries (signing certificates only).
 - Unknown publisher indicators.
-- Optional `osslsigncode verify` digest mismatch detection.
+- Digest verification — detects files modified after signing — via Windows
+  `WinVerifyTrust` (offline, built in) or `osslsigncode verify` elsewhere.
+  If neither is available the report says the digest was not verified.
+
+The actual signing certificate is selected by chain position and
+codeSigning EKU — PKCS#7 does not keep certificates in order, so the first
+certificate is often a root CA.
 
 > Full Windows trust validation, revocation, and timestamp policy decisions
 > are best confirmed on Windows with `signtool verify /pa`.
@@ -502,8 +511,10 @@ PS> python -m pytest -q tests
 - Full Authenticode trust validation is best confirmed with Windows
   `signtool`.
 - Some Linux/macOS details depend on external platform tools being available.
-- SQLite parsing extracts settings and obvious data but does not decrypt
-  protected application databases.
+- SQLite databases are read cell by cell (read-only), but encrypted
+  databases (SQLCipher etc.) cannot be inspected.
+- `--incremental` restores cached findings for unchanged files; delete
+  `.warden_cache/` after upgrading rule packs to force a full rescan.
 
 <h2 id="release-hygiene" align="center">Release Hygiene</h2>
 
@@ -513,6 +524,13 @@ Before packaging or pushing:
 PS> python -m compileall .
 PS> python cli.py --help
 PS> python -m pytest -q tests
+```
+
+Build the standalone Windows app (one `Warden.exe`, no console window):
+
+```powershell
+PS> pip install pyinstaller
+PS> pyinstaller --noconfirm warden.spec      # output: dist\Warden.exe
 ```
 
 Keep generated files out of source control:

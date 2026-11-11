@@ -50,6 +50,7 @@ from core.models import Finding, Severity
 URL_RE = re.compile(r"https?://[^\s\"'<>]{4,300}")
 
 SPARKLE_MARKERS = ("sparkle", "sufeedurl", "appcast")
+UPDATE_URL_KEYWORDS = ("update", "upgrade", "release", "download", "appcast", "sparkle", "latest")
 KEYCHAIN_MARKERS = ("securaddgenericpassword", "securitemadd", "sectransform", "keychain")
 INVENTORY_TAG = "inventory"
 
@@ -139,15 +140,15 @@ def _application_discovery(target_dir: Path, macho_files: list[Path]) -> list[Fi
                     tags=["quarantine"],
                 ))
 
-    findings.append(_mk(
-        "Application Discovery", "Mach-O Binaries Discovered",
-        "Info" if macho_files else "Warning",
-        evidence=f"{len(macho_files)} Mach-O file(s) found under {target_dir}",
-        description="Inventory of all Mach-O executables/libraries/frameworks found in the app bundle.",
-        recommendation="Confirm every shipped binary is expected/signed by the vendor's build process.",
-        file_path=str(target_dir),
-        tags=[INVENTORY_TAG],
-    ))
+    if macho_files:  # "0 Mach-O files" is noise on a non-macOS target
+        findings.append(_mk(
+            "Application Discovery", "Mach-O Binaries Discovered", "Info",
+            evidence=f"{len(macho_files)} Mach-O file(s) found",
+            description="Inventory of all Mach-O executables/libraries/frameworks found in the app bundle.",
+            recommendation="Confirm every shipped binary is expected/signed by the vendor's build process.",
+            file_path=str(target_dir),
+            tags=[INVENTORY_TAG],
+        ))
     return findings
 
 
@@ -308,11 +309,15 @@ def _binary_analysis(macho_files: list[Path]) -> list[Finding]:
     return findings
 
 
-def _config_and_secrets(target_dir: Path, rules_dir, enable_entropy: bool, single_file) -> list[Finding]:
+def _config_and_secrets(
+    target_dir: Path, rules_dir, enable_entropy: bool, single_file,
+    include_secrets: bool = True, error_callback=None,
+) -> list[Finding]:
+    # Skipped when another module already runs the secrets engine this scan.
     raw = secrets_module.run(
         target_dir=target_dir, rules_dir=rules_dir, enable_entropy=enable_entropy,
-        scan_pe_strings=False, single_file=single_file,
-    )
+        scan_pe_strings=False, single_file=single_file, error_callback=error_callback,
+    ) if include_secrets else []
     findings: list[Finding] = []
     for f in raw:
         ext = Path(f.file_path).suffix.lower()
@@ -329,7 +334,7 @@ def _config_and_secrets(target_dir: Path, rules_dir, enable_entropy: bool, singl
         f.tags = list(set(f.tags + ["macos", category.lower().replace(" ", "-")]))
         findings.append(f)
 
-    config_files = [p for p in iter_all_files(target_dir)
+    config_files = [p for p in iter_all_files(target_dir, single_file=single_file)
                     if p.suffix.lower() in {".plist", ".json", ".yaml", ".yml", ".conf", ".ini"}]
     if config_files:
         findings.append(_mk(
@@ -378,40 +383,43 @@ def _certificate_analysis(target_dir: Path) -> list[Finding]:
     return findings
 
 
-def _update_mechanism_analysis(target_dir: Path, macho_files: list[Path]) -> list[Finding]:
+def _update_mechanism_analysis(target_dir: Path, macho_files: list[Path], single_file=None) -> list[Finding]:
     findings: list[Finding] = []
     from core.pe_utils import extract_strings_from_bytes
 
-    candidates: list[tuple[str, str]] = []
+    # (source_path, text, is_declared_feed) — a Sparkle SUFeedURL is an
+    # update URL by definition; any other URL must itself look update-related.
+    candidates: list[tuple[str, str, bool]] = []
     for p in macho_files:
         try:
             data = p.read_bytes()
         except OSError:
             continue
         strings_only = [s for s, _ in extract_strings_from_bytes(data)]
-        candidates.append((str(p), "\n".join(strings_only)))
-    for p in iter_all_files(target_dir):
+        candidates.append((str(p), "\n".join(strings_only), False))
+    for p in iter_all_files(target_dir, single_file=single_file):
         if p.name == "Info.plist":
             plist = _load_plist(p)
             feed = plist.get("SUFeedURL")
             if feed:
                 key_marker = " SUPublicEDKey present" if "SUPublicEDKey" in plist else ""
-                candidates.append((str(p), f"sparkle SUFeedURL {feed}{key_marker}"))
-            if "SUPublicEDKey" in plist:
-                candidates.append((str(p), "sparkle SUPublicEDKey present (EdDSA update signing configured)"))
+                candidates.append((str(p), f"sparkle SUFeedURL {feed}{key_marker}", True))
         elif p.suffix.lower() in {".plist", ".conf", ".json"}:
             content = read_text_safely(p)
             if content:
-                candidates.append((str(p), content))
+                candidates.append((str(p), content, False))
 
     seen_urls = set()
-    for path_str, text in candidates:
+    for path_str, text, is_declared_feed in candidates:
         lowered = text.lower()
         if not any(k in lowered for k in SPARKLE_MARKERS) and "update" not in lowered:
             continue
         has_eddsa = "supublicedkey" in lowered
-        for url in URL_RE.findall(text):
+        urls = URL_RE.findall(text) if is_declared_feed else extract_urls(text, max_results=50)
+        for url in urls:
             if url in seen_urls:
+                continue
+            if not is_declared_feed and not any(k in url.lower() for k in UPDATE_URL_KEYWORDS):
                 continue
             seen_urls.add(url)
             if url.startswith("http://"):
@@ -473,8 +481,6 @@ def _third_party_libraries(target_dir: Path, macho_files: list[Path]) -> list[Fi
             tags=[INVENTORY_TAG, "sbom"],
         ))
 
-    frameworks = sorted({p.parent.name for p in iter_all_files(target_dir) if p.suffix == ".framework"
-                          or ".framework" in str(p)})
     framework_dirs = sorted({str(pp) for pp in target_dir.rglob("*.framework")}) if target_dir.exists() else []
     if framework_dirs:
         findings.append(_mk(
@@ -547,10 +553,10 @@ def _startup_items(target_dir: Path) -> list[Finding]:
     return findings
 
 
-def _tool_gap_findings(target_dir: Path) -> list[Finding]:
+def _tool_gap_findings(target_dir: Path, macho_files: list[Path]) -> list[Finding]:
     findings: list[Finding] = []
     missing = [tool for tool in ("otool", "codesign") if shutil.which(tool) is None]
-    if missing:
+    if missing and macho_files:
         findings.append(_mk(
             "Binary Analysis", "macOS Tooling Not Available", "Info",
             evidence="Missing tools: " + ", ".join(missing),
@@ -567,9 +573,10 @@ def _tool_gap_findings(target_dir: Path) -> list[Finding]:
 
 
 def _single_file_discovery(single_file: Path, macho_files: list[Path]) -> list[Finding]:
+    if not macho_files:  # not a Mach-O target — nothing macOS-specific to say
+        return []
     return [_mk(
-        "Application Discovery", "Single File Scope",
-        "Info" if macho_files else "Warning",
+        "Application Discovery", "Single File Scope", "Info",
         evidence=f"Single-file macOS scan target: {single_file}",
         description="The macOS module is restricted to the selected file; bundle-level Info.plist, startup, certificate, framework, and permission inventory is skipped.",
         recommendation="Run a folder scan against the full .app bundle for complete macOS thick-client coverage.",
@@ -585,6 +592,8 @@ def run(
     progress_callback=None,
     error_callback=None,
     include_inventory: bool = True,
+    include_secrets: bool = True,
+    include_certificates: bool = True,
 ) -> list[Finding]:
     """Entry point for the macOS thick-client static assessment module."""
     target_dir = Path(target_dir)
@@ -596,7 +605,10 @@ def run(
             progress_callback(str(p))
 
     findings: list[Finding] = []
-    findings.extend(_tool_gap_findings(target_dir))
+    findings.extend(_tool_gap_findings(target_dir, macho_files))
+    secrets_phase = lambda: _config_and_secrets(  # noqa: E731
+        target_dir, rules_dir, enable_entropy, single_file, include_secrets, error_callback
+    )
 
     def _phase(name: str, func):
         try:
@@ -608,8 +620,8 @@ def run(
     if single_file is not None:
         _phase("application-discovery", lambda: _single_file_discovery(single_file, macho_files))
         _phase("binary-analysis", lambda: _binary_analysis(macho_files))
-        _phase("secrets", lambda: _config_and_secrets(target_dir, rules_dir, enable_entropy, single_file))
-        _phase("update-mechanism", lambda: _update_mechanism_analysis(target_dir, macho_files))
+        _phase("secrets", secrets_phase)
+        _phase("update-mechanism", lambda: _update_mechanism_analysis(target_dir, macho_files, single_file))
         _phase("network-artifacts", lambda: _network_artifacts(findings))
         if not include_inventory:
             findings = [f for f in findings if INVENTORY_TAG not in f.tags]
@@ -617,8 +629,9 @@ def run(
 
     _phase("application-discovery", lambda: _application_discovery(target_dir, macho_files))
     _phase("binary-analysis", lambda: _binary_analysis(macho_files))
-    _phase("secrets", lambda: _config_and_secrets(target_dir, rules_dir, enable_entropy, single_file))
-    _phase("certificate-analysis", lambda: _certificate_analysis(target_dir))
+    _phase("secrets", secrets_phase)
+    if include_certificates:
+        _phase("certificate-analysis", lambda: _certificate_analysis(target_dir))
     _phase("update-mechanism", lambda: _update_mechanism_analysis(target_dir, macho_files))
     _phase("file-permissions", lambda: _file_permission_analysis(target_dir))
     _phase("third-party-libraries", lambda: _third_party_libraries(target_dir, macho_files))

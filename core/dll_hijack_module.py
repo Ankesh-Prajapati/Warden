@@ -18,14 +18,14 @@ Static analysis only — no runtime loader tracing, no actual hijack payloads.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 from core.fs_walk import check_permissive_permissions, find_pe_files
 from core.models import Finding, Severity
-from core.pe_utils import PEInfo, get_security_mitigations, is_pe_file, parse_pe
+from core.pe_utils import PEInfo, parse_pe
 
 # APIs that, if present, indicate the binary takes some control over DLL
 # search order/resolution rather than relying on default (unsafe) behavior.
@@ -37,22 +37,6 @@ SAFE_LOADING_APIS = {
     "loadlibraryexa", "loadlibraryexw",  # only "safe" if flags are used, but
     # detecting actual flag values requires deeper disasm; presence is a
     # a weaker positive signal noted as such in the finding description.
-}
-
-# Flags that indicate safe usage of LoadLibraryEx
-SAFE_LOAD_LIBRARY_EX_FLAGS = {
-    "LOAD_LIBRARY_SEARCH_SYSTEM32",      # 0x00000800
-    "LOAD_LIBRARY_SEARCH_USER_DIRS",     # 0x00000400
-    "LOAD_LIBRARY_SEARCH_APPLICATION_DIR", # 0x00000200
-    "LOAD_LIBRARY_SEARCH_DEFAULT_DIRS",  # 0x00001000
-}
-
-# Flags that indicate safe usage of SetDefaultDllDirectories
-SAFE_SET_DEFAULT_DLL_DIRECTORIES_FLAGS = {
-    "LOAD_LIBRARY_SEARCH_SYSTEM32",      # 0x00000800
-    "LOAD_LIBRARY_SEARCH_USER_DIRS",     # 0x00000400
-    "LOAD_LIBRARY_SEARCH_APPLICATION_DIR", # 0x00000200
-    "LOAD_LIBRARY_SEARCH_DEFAULT_DIRS",  # 0x00001000
 }
 
 # Import functions that indicate dynamic DLL loading is happening at all.
@@ -127,21 +111,39 @@ def parse_services_from_reg_text(text: str, source_name: str) -> list[ServiceEnt
     Handles the standard `regedit /e` export format:
         [HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\SomeService]
         "ImagePath"="C:\\\\Program Files\\\\App\\\\svc.exe"
+
+    ImagePath is usually REG_EXPAND_SZ, which regedit exports as
+    `"ImagePath"=hex(2):43,00,3a,00,...` (UTF-16LE bytes, wrapped across
+    lines with a trailing backslash) — those must be decoded, not read as
+    text. REG_SZ values escape quotes, e.g. `"\\"C:\\\\Program Files\\\\x.exe\\""`.
     """
     entries: list[ServiceEntry] = []
     current_service = None
 
     key_re = re.compile(r"\[.*\\Services\\([^\\\]]+)\]", re.IGNORECASE)
-    imagepath_re = re.compile(r'"ImagePath"\s*=\s*(?:hex\(2\):)?"?([^"\r\n]+)"?', re.IGNORECASE)
+    sz_re = re.compile(r'"ImagePath"\s*=\s*"((?:[^"\\]|\\.)*)"', re.IGNORECASE)
+    hex_re = re.compile(r'"ImagePath"\s*=\s*hex\(2\):([0-9a-f,\s]*)', re.IGNORECASE)
 
-    for line in text.splitlines():
+    # Join "\"-continued lines (hex values span many physical lines).
+    logical_lines = re.sub(r"\\\r?\n\s*", "", text).splitlines()
+
+    for line in logical_lines:
         key_match = key_re.search(line)
         if key_match:
             current_service = key_match.group(1)
             continue
-        img_match = imagepath_re.search(line)
-        if img_match and current_service:
-            raw_path = img_match.group(1).replace("\\\\", "\\")
+        if not current_service:
+            continue
+        raw_path = None
+        if m := sz_re.search(line):
+            raw_path = re.sub(r"\\(.)", r"\1", m.group(1))  # unescape \\ and \"
+        elif m := hex_re.search(line):
+            try:
+                data = bytes(int(b, 16) for b in m.group(1).replace(" ", "").split(",") if b)
+                raw_path = data.decode("utf-16-le", errors="ignore").rstrip("\x00")
+            except ValueError:
+                raw_path = None
+        if raw_path:
             entries.append(ServiceEntry(name=current_service, image_path=raw_path, source=source_name))
             current_service = None  # one ImagePath per service block expected
 
@@ -155,8 +157,11 @@ def parse_services_from_sc_query_text(text: str, source_name: str) -> list[Servi
     lines containing a drive-letter path ending in .exe (with optional args).
     """
     entries: list[ServiceEntry] = []
-    path_re = re.compile(r'([A-Za-z]:\\[^\r\n"]*?\.exe[^\r\n"]*)', re.IGNORECASE)
-    name_re = re.compile(r'(?:SERVICE_NAME|Name)\s*[:=]\s*(\S+)', re.IGNORECASE)
+    # Capture an optional leading quote too: dropping it made every properly
+    # quoted path ("C:\Program Files\...\svc.exe") look unquoted.
+    path_re = re.compile(r'("?[A-Za-z]:\\[^\r\n]*?\.exe\b[^\r\n]*)', re.IGNORECASE)
+    # Anchored: unanchored, "Name" also matched inside "BINARY_PATH_NAME :".
+    name_re = re.compile(r'^\s*(?:SERVICE_NAME|Name)\s*[:=]\s*(\S+)', re.IGNORECASE)
 
     current_name = "unknown-service"
     for line in text.splitlines():
@@ -166,7 +171,7 @@ def parse_services_from_sc_query_text(text: str, source_name: str) -> list[Servi
         path_match = path_re.search(line)
         if path_match:
             entries.append(
-                ServiceEntry(name=current_name, image_path=path_match.group(1), source=source_name)
+                ServiceEntry(name=current_name, image_path=path_match.group(1).strip(), source=source_name)
             )
 
     return entries
@@ -281,25 +286,11 @@ def _search_order_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
     }
 
     uses_loadlibrary = bool(all_funcs & LOAD_LIBRARY_APIS)
+    # LoadLibraryEx presence counts as "may be safe": verifying its flags
+    # would need disassembly of each call site.
     uses_safe_api = bool(all_funcs & SAFE_LOADING_APIS)
 
-    # Enhanced check: Look for LoadLibraryEx with safe flags
-    uses_safe_loadlibrary_ex = False
-    if "loadlibraryexa" in all_funcs or "loadlibraryexw" in all_funcs:
-        # For now, we conservatively assume LoadLibraryEx might be used safely
-        # In a more advanced implementation, we'd need to disassemble to check flags
-        uses_safe_loadlibrary_ex = True  # Conservative assumption for now
-
-    # Enhanced check: Look for SetDefaultDllDirectories with safe flags
-    uses_safe_setdefaultdlldirectories = False
-    if "setdefaultdlldirectories" in all_funcs:
-        # Similarly, we assume it might be used with safe flags
-        uses_safe_setdefaultdlldirectories = True  # Conservative assumption
-
-    # Overall safe API usage - more conservative now
-    uses_safe_api_enhanced = uses_safe_api or uses_safe_loadlibrary_ex or uses_safe_setdefaultdlldirectories
-
-    if uses_loadlibrary and not uses_safe_api_enhanced:
+    if uses_loadlibrary and not uses_safe_api:
         return Finding(
             module="dll_hijack",
             rule_id="dll-search-order-exposure",

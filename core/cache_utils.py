@@ -1,10 +1,17 @@
-"""Small SHA-256 backed scan cache for incremental module runs."""
+"""SHA-256 backed scan cache for incremental module runs.
+
+An unchanged file is not re-analyzed, but its findings from the previous
+run are restored from the cache — skipping a file must never make its
+findings disappear from the report.
+"""
 from __future__ import annotations
 
 import hashlib
 import json
 from pathlib import Path
 from typing import Any
+
+from core.models import Finding
 
 DEFAULT_CACHE_DIR = ".warden_cache"
 DEFAULT_CACHE_FILE = "sha256_scan_cache.json"
@@ -30,7 +37,9 @@ class ScanCache:
             return
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps(self.data, indent=2, sort_keys=True), encoding="utf-8")
+            self.path.write_text(
+                json.dumps(self.data, indent=2, sort_keys=True, default=str), encoding="utf-8"
+            )
         except OSError:
             pass
 
@@ -45,21 +54,26 @@ class ScanCache:
         stat = Path(path).stat()
         return {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
 
-    def unchanged(self, path: str | Path, module: str) -> bool:
+    def cached_findings(self, path: str | Path, module: str) -> list[Finding] | None:
+        """Previous findings for an unchanged file, or None if it must be rescanned."""
         if not self.enabled:
-            return False
+            return None
         try:
-            return self.data.get(self.key_for(path), {}).get(module, {}).get("sig") == self.signature_for(path)
-        except OSError:
-            return False
+            entry = self.data.get(self.key_for(path), {}).get(module, {})
+            if entry.get("sig") != self.signature_for(path) or "findings" not in entry:
+                return None
+            return [Finding.from_dict(d) for d in entry["findings"]]
+        except (OSError, KeyError, TypeError, ValueError):
+            return None
 
-    def mark_scanned(self, path: str | Path, module: str, sha256: str) -> None:
+    def mark_scanned(self, path: str | Path, module: str, sha256: str, findings: list[Finding]) -> None:
         if not self.enabled:
             return
         try:
             self.data.setdefault(self.key_for(path), {})[module] = {
                 "sig": self.signature_for(path),
                 "sha256": sha256,
+                "findings": [f.to_dict() for f in findings],
             }
         except OSError:
             return

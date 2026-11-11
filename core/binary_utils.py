@@ -21,6 +21,7 @@ import plistlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+from core import NO_CONSOLE
 
 # --- ELF -------------------------------------------------------------
 
@@ -119,7 +120,7 @@ def parse_elf(path: Path) -> ELFInfo:
         try:
             out = subprocess.run(
                 ["readelf", "-d", str(path)],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, **NO_CONSOLE, text=True, timeout=15,
             ).stdout
             for line in out.splitlines():
                 if "NEEDED" in line and "[" in line:
@@ -133,7 +134,7 @@ def parse_elf(path: Path) -> ELFInfo:
             # GNU_STACK executable-flag check (missing NX == exploit-relevant)
             hdrs = subprocess.run(
                 ["readelf", "-lW", str(path)],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, **NO_CONSOLE, text=True, timeout=15,
             ).stdout
             for line in hdrs.splitlines():
                 if "GNU_RELRO" in line and info.relro != "full":
@@ -151,13 +152,13 @@ def parse_elf(path: Path) -> ELFInfo:
                     info.nx_stack = "E" not in flag_tokens[-1]
             syms = subprocess.run(
                 ["readelf", "-sW", str(path)],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, **NO_CONSOLE, text=True, timeout=15,
             ).stdout
             info.has_stack_canary = "__stack_chk_fail" in syms
             info.fortify_symbols = sorted(set(re.findall(r"\b([A-Za-z0-9_]+_chk)(?:@@|\s)", syms)))
             info.stripped = ".symtab" not in subprocess.run(
                 ["readelf", "-SW", str(path)],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, **NO_CONSOLE, text=True, timeout=15,
             ).stdout
             if info.relro == "unknown":
                 info.relro = "none"
@@ -236,7 +237,7 @@ def parse_macho(path: Path) -> MachOInfo:
         try:
             out = subprocess.run(
                 ["otool", "-L", str(path)],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, **NO_CONSOLE, text=True, timeout=15,
             ).stdout
             for line in out.splitlines()[1:]:
                 lib = line.strip().split(" (")[0].strip()
@@ -244,7 +245,7 @@ def parse_macho(path: Path) -> MachOInfo:
                     info.linked_libraries.append(lib)
             rpath_out = subprocess.run(
                 ["otool", "-l", str(path)],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, **NO_CONSOLE, text=True, timeout=15,
             ).stdout
             lines = rpath_out.splitlines()
             for i, line in enumerate(lines):
@@ -260,7 +261,7 @@ def parse_macho(path: Path) -> MachOInfo:
         try:
             proc = subprocess.run(
                 ["codesign", "-dv", "--verbose=2", str(path)],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, **NO_CONSOLE, text=True, timeout=15,
             )
             combined = (proc.stdout or "") + (proc.stderr or "")
             if "code object is not signed" in combined.lower():
@@ -276,7 +277,7 @@ def parse_macho(path: Path) -> MachOInfo:
         try:
             ent = subprocess.run(
                 ["codesign", "-d", "--entitlements", ":-", str(path)],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, **NO_CONSOLE, text=True, timeout=15,
             )
             if ent.returncode == 0 and ent.stdout.strip():
                 info.entitlements_xml = ent.stdout
@@ -291,7 +292,7 @@ def parse_macho(path: Path) -> MachOInfo:
         try:
             proc = subprocess.run(
                 ["spctl", "-a", "-vv", "-t", "exec", str(path)],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, **NO_CONSOLE, text=True, timeout=15,
             )
             combined = (proc.stdout or "") + (proc.stderr or "")
             lower = combined.lower()

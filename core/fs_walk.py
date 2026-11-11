@@ -48,8 +48,28 @@ ALL_SCANNED_EXTENSIONS = (
     TEXT_EXTENSIONS | PE_EXTENSIONS | ELF_EXTENSIONS | MACHO_EXTENSIONS | DB_EXTENSIONS
 )
 
+# Well-known credential files that have no extension (or are dotfiles, whose
+# Path.suffix is empty — so ".env" itself never matched TEXT_EXTENSIONS).
+SECRET_FILENAMES = {
+    ".env", ".npmrc", ".yarnrc", ".pypirc", ".netrc", "_netrc", ".git-credentials",
+    ".pgpass", ".my.cnf", ".dockercfg", ".htpasswd", ".s3cfg", ".boto",
+    "credentials", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+}
+
+
+def is_secret_filename(path: Path) -> bool:
+    name = path.name.lower()
+    return name in SECRET_FILENAMES or name.startswith(".env.")
+
+
+def _is_scannable(path: Path) -> bool:
+    return path.suffix.lower() in ALL_SCANNED_EXTENSIONS or is_secret_filename(path)
+
+
 # Skip these — they bloat scan time and are never config/secret sources.
-SKIP_DIR_NAMES = {".git", "__pycache__", "node_modules"}
+# ".warden_cache" is Warden's own incremental cache (default location is
+# inside the target); scanning it re-reports cached evidence as new findings.
+SKIP_DIR_NAMES = {".git", "__pycache__", "node_modules", ".warden_cache"}
 
 # Guard against scanning pathologically large files (e.g. bundled installers,
 # embedded media) that will dominate scan time for little finding value.
@@ -69,8 +89,7 @@ def iter_target_files(root: Path, single_file: Path | None = None):
     """
     if single_file is not None:
         p = Path(single_file)
-        ext = p.suffix.lower()
-        if ext not in ALL_SCANNED_EXTENSIONS:
+        if not _is_scannable(p):
             return
         try:
             if not p.is_file() or p.stat().st_size > MAX_FILE_SIZE_BYTES:
@@ -92,8 +111,7 @@ def iter_target_files(root: Path, single_file: Path | None = None):
             # files well outside its intended scan scope.
             if p.is_symlink():
                 continue
-            ext = p.suffix.lower()
-            if ext not in ALL_SCANNED_EXTENSIONS:
+            if not _is_scannable(p):
                 continue
             try:
                 if p.stat().st_size > MAX_FILE_SIZE_BYTES:
@@ -207,7 +225,7 @@ def classify_file(path: Path) -> str:
         return "pe"
     if ext in DB_EXTENSIONS:
         return "db"
-    if ext in TEXT_EXTENSIONS:
+    if ext in TEXT_EXTENSIONS or is_secret_filename(path):
         return "text"
     return "unknown"
 

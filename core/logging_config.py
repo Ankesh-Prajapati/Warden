@@ -65,7 +65,7 @@ def setup_logging(
         # than crashing the whole application over logging infrastructure.
         console = True
 
-    if console:
+    if console and sys.stderr is not None:  # None in a windowed (no-console) build
         console_handler = logging.StreamHandler(sys.stderr)
         console_handler.setFormatter(logging.Formatter(LOG_FORMAT, DATE_FORMAT))
         console_handler.setLevel(level)

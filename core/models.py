@@ -60,12 +60,36 @@ class Finding:
     extra: dict = field(default_factory=dict)  # module-specific structured data
 
     def fingerprint(self) -> str:
-        """Deduplicate repeated emissions, but retain distinct source locations."""
+        """Deduplicate repeated emissions, but retain distinct locations and
+        distinct evidence. Evidence must be part of the identity: many
+        findings have no line/offset (one per unbundled DLL, per service, per
+        config key), and without it they all collapsed into the first one."""
         raw = (
             f"{self.module}|{self.rule_id}|{self.file_path}|"
-            f"{self.line_number}|{self.column_number}|{self.offset}"
+            f"{self.line_number}|{self.column_number}|{self.offset}|{self.evidence}"
         )
         return hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Finding":
+        """Inverse of to_dict() — used to restore cached findings."""
+        return cls(
+            module=d["module"],
+            rule_id=d["rule_id"],
+            title=d["title"],
+            severity=Severity.from_str(d["severity"]),
+            file_path=d["file_path"],
+            evidence=d["evidence"],
+            description=d.get("description", ""),
+            remediation=d.get("remediation", ""),
+            poc=d.get("poc", ""),
+            line_number=d.get("line_number"),
+            column_number=d.get("column_number"),
+            offset=d.get("offset"),
+            tags=list(d.get("tags", [])),
+            confidence=d.get("confidence", "Medium"),
+            extra=dict(d.get("extra", {})),
+        )
 
     def to_dict(self) -> dict:
         d = {
@@ -100,4 +124,4 @@ class ScanMetadata:
     module_execution_counts: dict[str, int] = field(default_factory=dict)
     module_input_execution_counts: dict[str, int] = field(default_factory=dict)
     module_extracted_execution_counts: dict[str, int] = field(default_factory=dict)
-    tool_version: str = "0.1.0"
+    tool_version: str = "1.1.0"

@@ -21,3 +21,6 @@ logs/
 
 # Keep source assets and reusable rule packs tracked; generated artifacts live in
 # build/ and reports/ and are intentionally excluded from version control.
+
+# PyInstaller output
+dist/

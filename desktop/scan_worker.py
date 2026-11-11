@@ -9,12 +9,11 @@ application outright.
 from __future__ import annotations
 
 import traceback
-from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Signal
 
 from core.logging_config import get_logger
-from core.scanner import ScanResult, run_scan
+from core.scanner import ScanCancelled, ScanResult, run_scan
 
 logger = get_logger("desktop.worker")
 
@@ -69,12 +68,9 @@ class ScanWorker(QObject):
         self.log_line.emit(f"Scanning {target_display}", "dim")
         self.log_line.emit(f"Modules: {', '.join(params['modules'])}", "dim")
 
-        class _Cancelled(Exception):
-            pass
-
         def progress_cb(path: str) -> None:
             if self._cancelled:
-                raise _Cancelled()
+                raise ScanCancelled()
             self._files_scanned += 1
             n = self._files_scanned
             if n % 25 == 0:
@@ -102,7 +98,7 @@ class ScanWorker(QObject):
                 progress_callback=progress_cb,
                 error_callback=error_cb,
             )
-        except _Cancelled:
+        except ScanCancelled:
             self.log_line.emit("Scan cancelled by user.", "warn")
             self.finished.emit(None)
             return
@@ -189,6 +185,15 @@ class ScanController(QObject):
     def cancel(self) -> None:
         if self._worker:
             self._worker.cancel()
+
+    def shutdown(self, timeout_ms: int = 15000) -> None:
+        """Cancel and wait for the worker thread (used on app exit). The scan
+        stops at its next progress callback; a running 7z call can delay that."""
+        if not self.is_running:
+            return
+        self.cancel()
+        self._thread.quit()
+        self._thread.wait(timeout_ms)
 
     def _teardown(self) -> None:
         if self._thread:

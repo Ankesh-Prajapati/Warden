@@ -19,7 +19,8 @@ outer file is still scanned exactly as before.
 
 Safety:
 - Bounded recursion depth (nested installers-within-installers).
-- Bounded total extracted size (zip-bomb protection).
+- Bounded total extracted size (zip-bomb protection), checked against the
+  archive listing before extraction and re-checked on disk afterwards.
 - Path-escape guard: refuses any extracted member that would land outside
   the destination directory, even though 7z itself already guards against
   this — defense in depth costs nothing here.
@@ -27,11 +28,14 @@ Safety:
 """
 from __future__ import annotations
 
+import os
+import re
 import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from core import NO_CONSOLE
 
 # Extensions worth *attempting* extraction on. `.exe`/`.dll` are included
 # because that's exactly the phantom-payload case above — an ordinary PE
@@ -55,12 +59,34 @@ class ExtractResult:
     truncated: bool = False
 
 
-def _sevenzip_available() -> bool:
-    return shutil.which("7z") is not None
+def _sevenzip_path() -> str | None:
+    """`7z` on PATH, else 7-Zip's default Windows install location (its
+    installer does not add itself to PATH)."""
+    found = shutil.which("7z")
+    if found:
+        return found
+    for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
+        if base and (candidate := Path(base) / "7-Zip" / "7z.exe").is_file():
+            return str(candidate)
+    return None
 
 
-def _looks_extractable(path: Path) -> bool:
-    return path.suffix.lower() in ARCHIVE_EXTENSIONS
+def _list_archive(sevenzip: str, archive_path: Path, timeout: int) -> tuple[int, str] | None:
+    """(total uncompressed size, archive type) per `7z l -slt`, or None if
+    7z can't open it as an archive. The size is checked *before* extracting
+    so a zip bomb is refused rather than written to disk first."""
+    try:
+        proc = subprocess.run(
+            [sevenzip, "l", "-slt", str(archive_path)],
+            capture_output=True, **NO_CONSOLE, text=True, errors="replace", timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    size = sum(int(n) for n in re.findall(r"^Size = (\d+)\s*$", proc.stdout, re.MULTILINE))
+    kind = re.search(r"^Type = (\S+)", proc.stdout, re.MULTILINE)
+    return size, kind.group(1) if kind else ""
 
 
 def _safe_join(base: Path, *parts: str) -> Path:
@@ -74,12 +100,12 @@ def _safe_join(base: Path, *parts: str) -> Path:
     return candidate
 
 
-def _extract_one(archive_path: Path, dest_dir: Path, timeout: int) -> tuple[bool, str]:
+def _extract_one(sevenzip: str, archive_path: Path, dest_dir: Path, timeout: int) -> tuple[bool, str]:
     """Run `7z x` once. Returns (success, message)."""
     try:
         proc = subprocess.run(
-            ["7z", "x", "-y", f"-o{dest_dir}", str(archive_path)],
-            capture_output=True, text=True, timeout=timeout,
+            [sevenzip, "x", "-y", f"-o{dest_dir}", str(archive_path)],
+            capture_output=True, **NO_CONSOLE, text=True, errors="replace", timeout=timeout,
         )
         if proc.returncode != 0:
             return False, (proc.stderr or proc.stdout or "unknown 7z error").strip()[:300]
@@ -119,8 +145,9 @@ def extract_archive_recursive(
     archive_path = Path(archive_path)
     result = ExtractResult(root=None)
 
-    if not _sevenzip_available():
-        result.warnings.append("7z not found on PATH — archive/installer extraction skipped")
+    sevenzip = _sevenzip_path()
+    if sevenzip is None:
+        result.warnings.append("7z not found (PATH or Program Files\\7-Zip) — archive/installer extraction skipped")
         return result
 
     root = Path(tempfile.mkdtemp(prefix="warden_extract_"))
@@ -129,6 +156,10 @@ def extract_archive_recursive(
     # (path_to_extract, destination_subdir, depth)
     queue: list[tuple[Path, Path, int]] = [(archive_path, root, 0)]
     seen_total_bytes = 0
+    # 7z opens any plain PE as "Type = PE" and dumps its raw sections. Those
+    # bytes were already covered by the PE string scan, so only nested
+    # archives found inside them are kept (see the post-pass below).
+    pe_dests: list[Path] = []
 
     while queue:
         current, dest, depth = queue.pop(0)
@@ -136,14 +167,29 @@ def extract_archive_recursive(
             result.warnings.append(f"Max nesting depth ({max_depth}) reached, stopped at {current.name}")
             continue
 
-        dest.mkdir(parents=True, exist_ok=True)
-        ok, err = _extract_one(current, dest, timeout_seconds)
-        if not ok:
+        listing = _list_archive(sevenzip, current, timeout_seconds)
+        if listing is None:
             # Not every .exe/.dll IS an archive — 7z failing on a plain
             # PE with no embedded archive payload is the expected common
             # case, not an error worth surfacing.
             continue
+        listed, kind = listing
+        if seen_total_bytes + listed > max_total_bytes:
+            result.truncated = True
+            result.warnings.append(
+                f"Skipped {current.name}: extracting it would exceed the "
+                f"{max_total_bytes // (1024*1024)} MB cap ({listed // (1024*1024)} MB listed)"
+            )
+            continue
 
+        dest.mkdir(parents=True, exist_ok=True)
+        ok, err = _extract_one(sevenzip, current, dest, timeout_seconds)
+        if not ok:
+            continue
+        if kind == "PE":
+            pe_dests.append(dest)
+
+        # Re-measure what actually landed on disk (the listing can understate).
         seen_total_bytes = _dir_size(root)
         if seen_total_bytes > max_total_bytes:
             result.truncated = True
@@ -178,6 +224,12 @@ def extract_archive_recursive(
             if depth < max_depth and not too_small and extracted != current:
                 queue.append((extracted, extracted.parent / f"{extracted.name}__unpacked", depth + 1))
 
+    # Drop raw PE section dumps, keeping only what was unpacked from them.
+    for dest in pe_dests:
+        for f in [p for p in dest.rglob("*") if p.is_file()]:
+            if not any(part.endswith("__unpacked") for part in f.relative_to(dest).parts):
+                f.unlink(missing_ok=True)
+    result.extracted_files = [f for f in result.extracted_files if f.exists()]
     return result
 
 

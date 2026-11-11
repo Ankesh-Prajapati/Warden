@@ -17,6 +17,8 @@ import binascii
 import ipaddress
 import json
 import re
+import sqlite3
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -31,7 +33,7 @@ from core.fs_walk import (
     read_text_safely,
 )
 from core.models import Finding, Severity
-from core.pe_utils import extract_strings_from_bytes, get_version_strings, is_pe_file, parse_pe
+from core.pe_utils import extract_strings_from_bytes, get_version_strings, is_pe_file
 from core.indicator_utils import is_version_attribute_context
 from core.rules import Rule, load_rules
 
@@ -40,10 +42,6 @@ DB_URI_RE = re.compile(
     r"\b(?P<scheme>postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|mssql|sqlserver|jdbc:[a-z0-9]+)://[^\s'\"<>]+",
     re.IGNORECASE,
 )
-# Enhanced cloud credential patterns
-AWS_SESSION_TOKEN_RE = re.compile(r'\b(A3T[A-Z0-9]|ATOA|AGOA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{10,}\b')
-AZURE_APP_TOKEN_RE = re.compile(r'(?i)eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+.*?(?:azure|microsoft)')
-GCP_OAUTH_TOKEN_RE = re.compile(r'\bya29\.[A-Za-z0-9_-]+\b')
 CORRELATION_KEYS = {
     "username": ("user", "username", "uid", "login"),
     "password": ("pass", "password", "pwd"),
@@ -85,7 +83,6 @@ def _isolate_value(evidence: str) -> str:
     # First, try to handle as a connection string with semicolon/comma delimited key=value pairs
     if ';' in evidence or ',' in evidence:
         # Split by both semicolon and comma to get potential key=value pairs
-        import re
         pairs = re.split(r'[;,]\s*', evidence)
 
         # First pass: look for password-related fields (most likely to contain secrets)
@@ -248,6 +245,25 @@ def _looks_like_code_identifier(evidence: str) -> bool:
         return False
     segments = [s for s in evidence.split("_") if s]
     return len(segments) >= 3 and all(s.isalpha() or s.isdigit() for s in segments)
+
+
+_SYMBOL_RUN_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
+_SYMBOL_CHARSET_RE = re.compile(r"(?:[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+|[_\-.])+")
+
+
+def _looks_like_symbol_name(candidate: str) -> bool:
+    """
+    Exported function / constant / OID names in a binary's string table
+    ("OSSL_CMP_CTX_push0_geninfo_ITAV", "XSetWindowBackgroundPixmap",
+    "id-tc26-cipher-gostr3412-2015-kuznyechik") score as high-entropy from
+    case mixing but are built from whole words: split into runs (Capitalized
+    word, lowercase word, ACRONYM, number) they average >=3 chars per run.
+    Random tokens switch character class every 1-2 chars and average far less.
+    """
+    if not _SYMBOL_CHARSET_RE.fullmatch(candidate):
+        return False  # base64 "+/=" etc. — not an identifier
+    runs = _SYMBOL_RUN_RE.findall(candidate)
+    return len(runs) >= 3 and sum(map(len, runs)) / len(runs) >= 3
 
 
 _IMAGE_MAGIC_BYTES = (
@@ -542,9 +558,6 @@ def _validate_jwt_signature(token: str) -> bool:
             return False
 
         # Try to decode header and payload
-        import base64
-        import json
-
         # Add padding if needed
         header = parts[0]
         payload = parts[1]
@@ -565,42 +578,6 @@ def _validate_jwt_signature(token: str) -> bool:
     except Exception:
         return False
 
-
-def _detect_enhanced_cloud_credentials(content: str) -> list[dict]:
-    """
-    Detect additional cloud credentials beyond the basic YAML rules.
-    Returns a list of dictionaries with credential information.
-    """
-    findings = []
-
-    # Enhanced AWS session tokens
-    for match in AWS_SESSION_TOKEN_RE.finditer(content):
-        findings.append({
-            'type': 'aws_session_token',
-            'value': match.group(0),
-            'start': match.start(),
-            'end': match.end()
-        })
-
-    # Enhanced Azure app tokens (JWT tokens that mention azure/microsoft)
-    for match in AZURE_APP_TOKEN_RE.finditer(content):
-        findings.append({
-            'type': 'azure_app_token',
-            'value': match.group(0),
-            'start': match.start(),
-            'end': match.end()
-        })
-
-    # Enhanced GCP OAuth tokens
-    for match in GCP_OAUTH_TOKEN_RE.finditer(content):
-        findings.append({
-            'type': 'gcp_oauth_token',
-            'value': match.group(0),
-            'start': match.start(),
-            'end': match.end()
-        })
-
-    return findings
 
 
 def _confidence_for(evidence: str, base: str = "Medium") -> str:
@@ -673,7 +650,6 @@ def _jwt_findings(
         confidence = "High"
         if "exp" in payload:
             try:
-                import time
                 exp_timestamp = payload["exp"]
                 if isinstance(exp_timestamp, (int, float)) and exp_timestamp < time.time():
                     # Expired token
@@ -952,6 +928,11 @@ def _scan_text_content(
     for rule in rules:
         for match in rule.finditer(content):
             evidence_raw = match.group(0)
+            if source_locations is not None and "\n" in evidence_raw.strip():
+                # Binary mode: each line is a separate extracted string, so a
+                # match spanning lines glues unrelated strings together
+                # (e.g. the UI labels "Enter password:" + "Reenter password:").
+                continue
             if _looks_like_regex_definition(evidence_raw):
                 # This match is a regex pattern literal (e.g. a rule
                 # definition inside a rules/*.yaml-style file), not an
@@ -1086,6 +1067,8 @@ def _scan_text_content(
                 continue
             if _entropy_candidate_has_benign_context(candidate, content, offset):
                 continue
+            if source_locations is not None and _looks_like_symbol_name(candidate):
+                continue
             line_no = content.count("\n", 0, offset) + 1
             findings.append(
                 Finding(
@@ -1124,26 +1107,90 @@ def _scan_text_content(
     return findings
 
 
-def _config_intel_findings(path: Path, rules: list[Rule] | None = None) -> list[Finding]:
+_TRUTHY = {"true", "1", "yes", "on", "enabled"}
+_FALSY = {"false", "0", "no", "off", "disabled", "none"}
+_VERBOSE_LOG_LEVELS = {"debug", "trace", "verbose", "all"}
+# ${VAR}, {{ var }}, %VAR%, $VAR, <placeholder> — references, not values.
+_REFERENCE_VALUE_RE = re.compile(r"^(?:\$\{[^}]*\}|\{\{.*\}\}|%[A-Za-z_][\w]*%|\$[A-Za-z_]\w*|<[^>]*>)$")
+
+
+def _config_value_finding(setting: dict, covered_evidence: list[str]) -> tuple[Severity, str] | None:
+    """Decide whether a parsed config setting is worth reporting.
+
+    The key name alone ("password_min_length", "token_lifetime") says
+    nothing — the value decides. Returns (severity, reason) or None."""
+    tags = setting["tags"]
+    raw = setting["value"]
+    text = str(raw).strip().strip("'\"")
+    lowered = text.lower()
+
+    if "auth-setting" in tags or "database-setting" in tags:
+        if isinstance(raw, (bool, int, float)) or len(text) < 6:
+            return None  # policy numbers/flags, empty or trivially short values
+        if _REFERENCE_VALUE_RE.match(text) or _looks_like_placeholder(text) or _looks_like_test_or_example_content(text):
+            return None
+        if any(text in e for e in covered_evidence):
+            return None  # already reported by a specific secrets rule
+        if "auth-setting" not in tags and not re.search(r"://|;|(?:password|pwd)\s*=", text, re.IGNORECASE):
+            return None  # database name/host only, not a credential
+        return Severity.MEDIUM, "credential-like value stored in configuration"
+    if "debug-setting" in tags and lowered in _TRUTHY:
+        return Severity.LOW, "debug/trace mode enabled"
+    if "tls-setting" in tags and lowered in _FALSY:
+        return Severity.LOW, "TLS/certificate verification disabled"
+    if "logging-setting" in tags and lowered in _VERBOSE_LOG_LEVELS:
+        return Severity.LOW, "verbose logging enabled"
+    return None
+
+
+def _config_intel_findings(path: Path, covered_evidence: list[str] | None = None) -> list[Finding]:
     findings = []
     for setting in extract_interesting_settings(path):
-        value = setting["value"]
-        key = setting["key"]
-        sensitive = any(t in setting["tags"] for t in ("auth-setting", "database-setting"))
+        verdict = _config_value_finding(setting, covered_evidence or [])
+        if verdict is None:
+            continue
+        severity, reason = verdict
+        key, value = setting["key"], setting["value"]
         findings.append(Finding(
             module="secrets",
             rule_id="config-intelligence-setting",
-            title=f"{setting['format']} configuration exposes security-relevant setting",
-            severity=Severity.MEDIUM if sensitive else Severity.LOW,
+            title=f"{setting['format']} configuration: {reason}",
+            severity=severity,
             file_path=str(path),
             evidence=f"{key}={value}",
-            description="Warden parsed this configuration file and identified an authentication, database, logging, TLS, or debug setting.",
+            description=f"Warden parsed this configuration file and found a setting where {reason}.",
             remediation="Review this setting for production safety. Keep secrets out of config files, disable debug mode, enforce TLS verification, and avoid verbose sensitive logging.",
             tags=["config-intelligence"] + setting["tags"],
-            confidence="Medium",
+            confidence=_confidence_for(f"{key}={value}") if severity == Severity.MEDIUM else "Medium",
             extra={"config": setting},
         ))
     return findings
+
+
+def _sqlite_text(path: Path, max_rows_per_table: int = 5000) -> str | None:
+    """One line per text cell of a real SQLite database (read-only), or None.
+
+    Raw byte sniffing glues adjacent record fields together ("payment" +
+    "sk_live_...") so word-boundary rules never match."""
+    try:
+        with open(path, "rb") as f:
+            if f.read(16) != b"SQLite format 3\x00":
+                return None
+        con = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro&immutable=1", uri=True)
+    except Exception:
+        return None
+    lines: list[str] = []
+    try:
+        tables = [r[0] for r in con.execute("select name from sqlite_master where type='table'")]
+        for table in tables:
+            quoted = '"' + table.replace('"', '""') + '"'
+            for row in con.execute(f"select * from {quoted} limit {int(max_rows_per_table)}"):
+                lines.extend(str(v) for v in row if isinstance(v, str) and v.strip())
+    except Exception:
+        pass
+    finally:
+        con.close()
+    return "\n".join(lines)
 
 
 def _scan_pe_strings(
@@ -1322,10 +1369,12 @@ def run(
                 all_findings.append(f)
 
     def _scan_path(path: Path) -> tuple[Path, list[Finding]]:
-        if scan_cache and scan_cache.unchanged(path, "secrets"):
-            return path, []
         if progress_callback:
             progress_callback(str(path))
+        if scan_cache:
+            cached = scan_cache.cached_findings(path, "secrets")
+            if cached is not None:
+                return path, cached
 
         try:
             kind = classify_file(path)
@@ -1335,22 +1384,22 @@ def run(
                 content = read_text_safely(path)
                 if content:
                     file_findings = _scan_text_content(content, str(path), rules, enable_entropy)
-                    file_findings.extend(_config_intel_findings(path, rules))
+                    file_findings.extend(_config_intel_findings(path, [f.evidence for f in file_findings]))
 
             elif kind == "pe" and scan_pe_strings and is_pe_file(path):
                 file_findings = _scan_pe_strings(path, rules, enable_entropy)
 
             elif kind == "db":
-                # v1: sniff raw bytes for plaintext PII/credential patterns only;
-                # no structured DB parsing (SQLite page format, Access JET) yet.
-                try:
-                    raw = path.read_bytes()[: 20 * 1024 * 1024]
-                    content = raw.decode("utf-8", errors="ignore")
-                except OSError:
-                    content = ""
+                # SQLite: read cell by cell. Other formats (Access JET):
+                # sniff raw bytes for plaintext patterns.
+                content = _sqlite_text(path)
+                if content is None:
+                    try:
+                        content = path.read_bytes()[: 20 * 1024 * 1024].decode("utf-8", errors="ignore")
+                    except OSError:
+                        content = ""
                 if content:
                     file_findings = _scan_text_content(content, str(path), rules, enable_entropy)
-                    file_findings.extend(_config_intel_findings(path, rules))
                     for f in file_findings:
                         f.tags = list(set(f.tags + ["local-database"]))
 
@@ -1358,7 +1407,7 @@ def run(
                 file_findings = _correlate_related_secrets(file_findings)
                 file_findings.extend(_flag_permissions(path, file_findings))
             if scan_cache:
-                scan_cache.mark_scanned(path, "secrets", sha256_file(path))
+                scan_cache.mark_scanned(path, "secrets", sha256_file(path), file_findings)
             return path, file_findings
         except Exception as e:
             # One malformed/unreadable file must never wipe out every

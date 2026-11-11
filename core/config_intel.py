@@ -88,7 +88,10 @@ def parse_config_file(path: Path) -> dict[str, Any] | None:
         if ext in {".xml", ".config", ".manifest"}:
             return {"format": "XML", "data": _parse_xml(path.read_text(encoding="utf-8", errors="ignore"))}
         if ext in {".ini", ".conf", ".cfg", ".properties", ".env"}:
-            parser = configparser.ConfigParser()
+            # No interpolation: a literal "%" in any value (common in real
+            # passwords) otherwise raises and drops the whole file; not strict
+            # so a duplicated key doesn't either.
+            parser = configparser.ConfigParser(interpolation=None, strict=False)
             text = path.read_text(encoding="utf-8", errors="ignore")
             if ext in {".env", ".properties"}:
                 text = "[default]\n" + text
@@ -100,7 +103,8 @@ def parse_config_file(path: Path) -> dict[str, Any] | None:
             with open(path, "rb") as f:
                 return {"format": "plist", "data": plistlib.load(f)}
         if ext in {".sqlite", ".sqlite3", ".db"}:
-            con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            # as_uri() percent-encodes "?", "#", "%" and spaces in the path.
+            con = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
             try:
                 rows = con.execute("select name from sqlite_master where type='table'").fetchall()
                 return {"format": "SQLite", "data": {"tables": [r[0] for r in rows]}}

@@ -2,8 +2,7 @@
 Warden orchestrator.
 
 Coordinates individual modules and merges their Finding output into a single
-scan result. Modules 2-4 are stubbed here and will be wired in as they're
-built, one at a time.
+scan result.
 """
 from __future__ import annotations
 
@@ -25,6 +24,15 @@ from core.plugin_system import load_python_detectors, run_python_detectors
 logger = get_logger("scanner")
 
 SEVERITY_ORDER = [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW, Severity.INFO]
+
+
+class ScanCancelled(BaseException):
+    """Raised from a progress callback to abort the scan.
+
+    Deliberately a BaseException: every module guards per-file work with
+    `except Exception` so one bad file can't kill a scan, and a regular
+    Exception would be swallowed there — turning "cancel" into "this module
+    failed" while the scan carried on."""
 
 
 class ScanResult:
@@ -144,8 +152,9 @@ def run_scan(
     """
     Run the requested modules against target_dir and return a merged ScanResult.
 
-    modules: list of module names to run. Currently supported: ["secrets"].
-             Defaults to all currently-implemented modules.
+    modules: list of module names to run: secrets, dll_hijack, signature,
+             re_exposure, linux, macos, reputation. Defaults to ["secrets"].
+    progress_callback: may raise ScanCancelled to abort the scan.
     single_file: if given, every module is restricted to analyzing exactly
         this one file (target_dir is still used as directory context, e.g.
         for sibling-DLL inventory in Module 2) instead of walking the whole
@@ -228,6 +237,9 @@ def run_scan(
         dispatch logic can run a second time against extracted archive
         content, instead of duplicating each `if "x" in modules:` block."""
         findings: list[Finding] = []
+        # Temp extraction paths change every run, so caching them only bloats
+        # the cache file without ever producing a hit.
+        cache = None if extracted else scan_cache
 
         def report_progress(path: str) -> None:
             _wrapped_progress(path, extracted=extracted)
@@ -241,7 +253,7 @@ def run_scan(
                 scan_pe_strings=scan_pe_strings,
                 single_file=s_file,
                 progress_callback=report_progress,
-                scan_cache=scan_cache,
+                scan_cache=cache,
                 max_workers=max_workers,
                 extracted=extracted,
             ))
@@ -250,7 +262,9 @@ def run_scan(
             findings.extend(_run_module(
                 "dll_hijack", dll_hijack_module.run,
                 target_dir=t_dir,
-                services_file=services_file,
+                # The services file is an input outside the target; parsing it
+                # again for every extracted archive only duplicated findings.
+                services_file=None if extracted else services_file,
                 single_file=s_file,
                 progress_callback=report_progress,
                 extracted=extracted,
@@ -292,7 +306,7 @@ def run_scan(
                 single_file=s_file,
                 progress_callback=report_progress,
                 yara_rules_dir=yara_rules_dir,
-                scan_cache=scan_cache,
+                scan_cache=cache,
                 extracted=extracted,
             ))
 
@@ -305,6 +319,7 @@ def run_scan(
                 single_file=s_file,
                 progress_callback=report_progress,
                 include_inventory=include_inventory,
+                include_secrets="secrets" not in modules,
                 extracted=extracted,
             ))
 
@@ -317,6 +332,10 @@ def run_scan(
                 single_file=s_file,
                 progress_callback=report_progress,
                 include_inventory=include_inventory,
+                # Only one module re-runs the secrets engine, otherwise the same
+                # secret is reported once per module.
+                include_secrets="secrets" not in modules and "linux" not in modules,
+                include_certificates="linux" not in modules,  # linux already checks bundled certs
                 extracted=extracted,
             ))
 
@@ -356,17 +375,20 @@ def run_scan(
                 max_depth=archive_max_depth,
                 max_total_bytes=archive_max_size_mb * 1024 * 1024,
             )
-            for warning in extraction.warnings:
-                _wrapped_error(f"archive extraction ({candidate.name}): {warning}")
-            if extraction.root and extraction.extracted_files:
-                nested_findings = _dispatch_modules(
-                    extraction.root, None, extracted=True
-                )
-                for f in nested_findings:
-                    f.extra["extracted_from"] = str(candidate)
-                    f.tags = list(set(f.tags + ["extracted-content"]))
-                all_findings.extend(nested_findings)
-            cleanup_extraction(extraction)
+            try:
+                for warning in extraction.warnings:
+                    _wrapped_error(f"archive extraction ({candidate.name}): {warning}")
+                if extraction.root and extraction.extracted_files:
+                    nested_findings = _dispatch_modules(
+                        extraction.root, None, extracted=True
+                    )
+                    for f in nested_findings:
+                        f.extra["extracted_from"] = str(candidate)
+                        f.tags = sorted(set(f.tags + ["extracted-content"]))
+                    all_findings.extend(nested_findings)
+            finally:
+                # Also runs on cancel, so temp extraction dirs never leak.
+                cleanup_extraction(extraction)
 
     metadata.files_scanned = len(scanned_file_paths)
     metadata.extracted_files_scanned = len(extracted_file_paths)

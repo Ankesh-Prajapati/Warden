@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import sys
 import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -34,17 +35,19 @@ from cryptography import x509
 from cryptography.hazmat.primitives.serialization import pkcs7
 from cryptography.x509.oid import NameOID
 
+from core import NO_CONSOLE
 from core.fs_walk import find_pe_files
 from core.models import Finding, Severity
 from core.pe_utils import (
     extract_pkcs7_from_win_certificate,
-    extract_strings_from_bytes,
     get_security_directory_bytes,
-    is_pe_file,
     parse_pe,
 )
 
 WEAK_HASH_ALGORITHMS = {"sha1", "md5"}
+
+# Whole-word match so e.g. "Contest Ltd" / "Latest Software" aren't flagged.
+_PLACEHOLDER_PUBLISHER_RE = re.compile(r"\b(?:unknown|test|localhost|default|sample)\b", re.IGNORECASE)
 
 # Import functions whose presence indicates the binary itself does some
 # form of signature/trust verification (relevant to the auto-update check).
@@ -58,6 +61,17 @@ TRUST_VERIFY_APIS = {
 UPDATE_KEYWORDS = ("update", "autoupdate", "updater", "upgrade", "/version", "manifest.json")
 
 
+# DER-encoded OIDs of the two Authenticode timestamp forms carried in the
+# signer's unsigned attributes: PKCS#9 countersignature (1.2.840.113549.1.9.6)
+# and Microsoft's RFC 3161 timestamp token (1.3.6.1.4.1.311.3.3.1).
+# ponytail: byte search, not a full SignerInfo parse — an exact OID match
+# inside a PKCS#7 blob is unambiguous enough; parse ASN.1 if this ever misfires.
+_TIMESTAMP_OID_DER = (
+    bytes.fromhex("06092A864886F70D010906"),
+    bytes.fromhex("060A2B060104018237030301"),
+)
+
+
 @dataclass
 class CertSummary:
     subject_cn: str
@@ -69,7 +83,10 @@ class CertSummary:
     is_expired: bool
     serial_number: str = ""
     is_ca: bool = False
-    is_timestamp: bool = False
+    is_timestamp: bool = False      # EKU timeStamping
+    is_code_signing: bool = False   # EKU codeSigning
+    subject_name: str = ""          # full RFC 4514 subject
+    issuer_name: str = ""           # full RFC 4514 issuer
 
 
 @dataclass
@@ -82,6 +99,33 @@ class BinarySignatureInfo:
     osslsigncode_verified: Optional[bool] = None  # None = tool unavailable
     osslsigncode_digest_mismatch: bool = False
     timestamp_present: Optional[bool] = None
+    leaf_index: Optional[int] = None
+
+    @property
+    def leaf(self) -> Optional[CertSummary]:
+        return self.certs[self.leaf_index] if self.leaf_index is not None else None
+
+
+def _pick_leaf_index(certs: list[CertSummary]) -> Optional[int]:
+    """
+    The certificate set in a PKCS#7 SignedData blob is unordered — on real
+    signed binaries (git.exe, python.exe) the first entry is a root CA. Pick
+    the actual signer: a non-CA, non-timestamp cert, preferring codeSigning
+    EKU and a cert that did not issue any other cert in the set.
+    """
+    if not certs:
+        return None
+    issuer_names = {c.issuer_name for c in certs}
+    candidates = [i for i, c in enumerate(certs) if not c.is_ca and not c.is_timestamp]
+    for pool in (
+        [i for i in candidates if certs[i].is_code_signing and certs[i].subject_name not in issuer_names],
+        [i for i in candidates if certs[i].is_code_signing],
+        [i for i in candidates if certs[i].subject_name not in issuer_names],
+        candidates,
+    ):
+        if pool:
+            return pool[0]
+    return 0
 
 
 def _cn_from_name(name: x509.Name) -> str:
@@ -127,27 +171,36 @@ def parse_signature(pe_path: Path) -> BinarySignatureInfo:
 
     now = datetime.now(timezone.utc)
     summaries: list[CertSummary] = []
-    for i, cert in enumerate(certs):
-        subject_cn = _cn_from_name(cert.subject)
-        issuer_cn = _cn_from_name(cert.issuer)
+    for cert in certs:
         not_before = _cert_not_valid_before(cert)
         not_after = _cert_not_valid_after(cert)
+        ekus = _extended_key_usages(cert)
         summaries.append(
             CertSummary(
-                subject_cn=subject_cn,
-                issuer_cn=issuer_cn,
+                subject_cn=_cn_from_name(cert.subject),
+                issuer_cn=_cn_from_name(cert.issuer),
                 not_valid_before=not_before,
                 not_valid_after=not_after,
                 signature_hash_algorithm=cert.signature_hash_algorithm.name if cert.signature_hash_algorithm else "unknown",
-                self_signed=(subject_cn == issuer_cn),
+                # Full-Name equality, not CN: distinct certs can share a CN.
+                self_signed=(cert.subject == cert.issuer),
                 is_expired=(now > not_after if not_after else False),
                 serial_number=hex(cert.serial_number),
                 is_ca=_is_ca_certificate(cert),
-                is_timestamp=_is_timestamp_certificate(cert, i, len(certs)),
+                is_timestamp=x509.ExtendedKeyUsageOID.TIME_STAMPING in ekus,
+                is_code_signing=x509.ExtendedKeyUsageOID.CODE_SIGNING in ekus,
+                subject_name=cert.subject.rfc4514_string(),
+                issuer_name=cert.issuer.rfc4514_string(),
             )
         )
 
-    return BinarySignatureInfo(path=str(pe_path), is_signed=True, certs=summaries)
+    return BinarySignatureInfo(
+        path=str(pe_path),
+        is_signed=True,
+        certs=summaries,
+        timestamp_present=any(oid in pkcs7_der for oid in _TIMESTAMP_OID_DER),
+        leaf_index=_pick_leaf_index(summaries),
+    )
 
 
 def _is_ca_certificate(cert: x509.Certificate) -> bool:
@@ -158,25 +211,11 @@ def _is_ca_certificate(cert: x509.Certificate) -> bool:
         return False
 
 
-def _is_timestamp_certificate(cert: x509.Certificate, cert_index: int, total_certs: int) -> bool:
-    """
-    Heuristic to identify timestamp certificates in the PKCS#7 certificate chain.
-    Timestamp certificates are usually the last certificate in the chain when
-    present, and often have specific extensions or usage properties.
-    """
-    # If there's only one certificate, it's not a timestamp certificate
-    if total_certs <= 1:
-        return False
-
-    # Timestamp certificates are often at the end of the chain
-    # This is a simplification - in reality, we'd need to check extended key usage
-    # but for now we'll use position as a heuristic
-    if cert_index == total_certs - 1:  # Last certificate in chain
-        # Additional checks could go here for EKU, etc.
-        # For now, we'll assume last cert might be timestamp
-        return True
-
-    return False
+def _extended_key_usages(cert: x509.Certificate) -> set:
+    try:
+        return set(cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value)
+    except Exception:
+        return set()
 
 
 def run_osslsigncode_verify(pe_path: Path) -> tuple[Optional[bool], Optional[str], bool]:
@@ -201,7 +240,7 @@ def run_osslsigncode_verify(pe_path: Path) -> tuple[Optional[bool], Optional[str
     try:
         result = subprocess.run(
             ["osslsigncode", "verify", str(pe_path)],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, **NO_CONSOLE, text=True, timeout=30,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         return None, f"osslsigncode invocation failed: {e}", False
@@ -220,18 +259,78 @@ def run_osslsigncode_verify(pe_path: Path) -> tuple[Optional[bool], Optional[str
     return verified, output.strip(), digest_mismatch
 
 
+_TRUST_E_BAD_DIGEST = 0x80096010
+_TRUST_E_NOSIGNATURE = 0x800B0100
+
+
+def run_winverifytrust(pe_path: Path) -> tuple[Optional[bool], Optional[str], bool]:
+    """
+    Windows-native Authenticode verification via WinVerifyTrust — same
+    return shape as run_osslsigncode_verify. Offline: revocation checks off
+    and URL retrieval limited to cache, so it never blocks on the network.
+    TRUST_E_BAD_DIGEST is the "file modified after signing" result.
+    """
+    if sys.platform != "win32":
+        return None, None, False
+    import ctypes
+    from ctypes import wintypes
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                    ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8)]
+
+    class WINTRUST_FILE_INFO(ctypes.Structure):
+        _fields_ = [("cbStruct", wintypes.DWORD), ("pcwszFilePath", wintypes.LPCWSTR),
+                    ("hFile", wintypes.HANDLE), ("pgKnownSubject", ctypes.POINTER(GUID))]
+
+    class WINTRUST_DATA(ctypes.Structure):
+        _fields_ = [("cbStruct", wintypes.DWORD), ("pPolicyCallbackData", ctypes.c_void_p),
+                    ("pSIPClientData", ctypes.c_void_p), ("dwUIChoice", wintypes.DWORD),
+                    ("fdwRevocationChecks", wintypes.DWORD), ("dwUnionChoice", wintypes.DWORD),
+                    ("pFile", ctypes.POINTER(WINTRUST_FILE_INFO)), ("dwStateAction", wintypes.DWORD),
+                    ("hWVTStateData", wintypes.HANDLE), ("pwszURLReference", wintypes.LPCWSTR),
+                    ("dwProvFlags", wintypes.DWORD), ("dwUIContext", wintypes.DWORD),
+                    ("pSignatureSettings", ctypes.c_void_p)]
+
+    # WINTRUST_ACTION_GENERIC_VERIFY_V2 {00AAC56B-CD44-11d0-8CC2-00C04FC295EE}
+    action = GUID(0x00AAC56B, 0xCD44, 0x11D0, (ctypes.c_ubyte * 8)(0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE))
+    file_info = WINTRUST_FILE_INFO(ctypes.sizeof(WINTRUST_FILE_INFO), str(pe_path), None, None)
+    data = WINTRUST_DATA()
+    data.cbStruct = ctypes.sizeof(WINTRUST_DATA)
+    data.dwUIChoice = 2              # WTD_UI_NONE
+    data.fdwRevocationChecks = 0     # WTD_REVOKE_NONE
+    data.dwUnionChoice = 1           # WTD_CHOICE_FILE
+    data.pFile = ctypes.pointer(file_info)
+    data.dwStateAction = 1           # WTD_STATEACTION_VERIFY
+    data.dwProvFlags = 0x10 | 0x1000  # WTD_REVOCATION_CHECK_NONE | WTD_CACHE_ONLY_URL_RETRIEVAL
+    try:
+        wvt = ctypes.windll.wintrust.WinVerifyTrust
+        wvt.restype = ctypes.c_long
+        status = wvt(wintypes.HANDLE(-1), ctypes.byref(action), ctypes.byref(data)) & 0xFFFFFFFF
+        data.dwStateAction = 2       # WTD_STATEACTION_CLOSE
+        wvt(wintypes.HANDLE(-1), ctypes.byref(action), ctypes.byref(data))
+    except (OSError, AttributeError) as e:
+        return None, f"WinVerifyTrust unavailable: {e}", False
+    if status == _TRUST_E_NOSIGNATURE:
+        return None, None, False
+    output = f"WinVerifyTrust status 0x{status:08X}" + (" (signature verified)" if status == 0 else "")
+    return status == 0, output, status == _TRUST_E_BAD_DIGEST
+
+
 def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) -> list[Finding]:
     findings: list[Finding] = []
     path = sig_info.path
 
-    if use_osslsigncode:
+    # Deep digest/chain verification for signed files: osslsigncode when
+    # installed, otherwise Windows' own WinVerifyTrust. (The osslsigncode_*
+    # fields hold whichever verifier ran.)
+    if use_osslsigncode and sig_info.is_signed:
         verified, output, digest_mismatch = run_osslsigncode_verify(Path(path))
+        if verified is None:
+            verified, output, digest_mismatch = run_winverifytrust(Path(path))
         sig_info.osslsigncode_verified = verified
         sig_info.osslsigncode_output = output
         sig_info.osslsigncode_digest_mismatch = digest_mismatch
-        if output:
-            lower = output.lower()
-            sig_info.timestamp_present = "timestamp" in lower and "no timestamp" not in lower
 
     if not sig_info.is_signed:
         findings.append(
@@ -239,7 +338,8 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
                 module="signature",
                 rule_id="unsigned-binary",
                 title="Unsigned executable/library",
-                severity=Severity.HIGH,
+                # Medium: a hardening/trust gap, not an exploitable flaw by itself.
+                severity=Severity.MEDIUM,
                 file_path=path,
                 evidence="No Authenticode signature (security directory) present",
                 description=(
@@ -329,10 +429,9 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
             extra={"certificate_chain": chain_extra},
         ))
 
-        leaf = sig_info.certs[0]
+        leaf = sig_info.leaf
         publisher_name = leaf.subject_cn.strip()
-        unknown_markers = ("unknown", "test", "localhost", "default", "sample")
-        if not publisher_name or any(m in publisher_name.lower() for m in unknown_markers):
+        if not publisher_name or _PLACEHOLDER_PUBLISHER_RE.search(publisher_name):
             findings.append(Finding(
                 module="signature",
                 rule_id="unknown-publisher",
@@ -366,7 +465,7 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
             title="Authenticode timestamp not detected",
             severity=Severity.MEDIUM,
             file_path=path,
-            evidence="osslsigncode output did not report a timestamp",
+            evidence="No countersignature / RFC 3161 timestamp token in the signature",
             description="A signed binary without a timestamp may stop validating when the signing certificate expires.",
             remediation="Timestamp signatures during release signing using a trusted RFC3161 timestamp authority.",
             tags=["signature", "timestamp"],
@@ -379,7 +478,7 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
             title="Authenticode timestamp detected",
             severity=Severity.INFO,
             file_path=path,
-            evidence="Timestamp information present in signature verification output",
+            evidence="Countersignature / RFC 3161 timestamp token present in the signature",
             description="The signature appears to include timestamp information, which helps signatures remain valid after certificate expiry.",
             remediation="Continue timestamping all production code signatures and monitor timestamp authority trust.",
             tags=["signature", "timestamp"],
@@ -391,12 +490,12 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
             Finding(
                 module="signature",
                 rule_id="signature-verification-failed",
-                title="Authenticode signature failed verification (osslsigncode)",
+                title="Authenticode signature failed verification (file modified after signing)",
                 severity=Severity.CRITICAL,
                 file_path=path,
                 evidence=(sig_info.osslsigncode_output or "")[:500],
                 description=(
-                    "`osslsigncode verify` reported that this binary's "
+                    "Digest verification (osslsigncode or Windows WinVerifyTrust) reported that this binary's "
                     "embedded signature does not validate. This can mean the "
                     "file was modified after signing, the signature is "
                     "corrupt, or the certificate chain does not resolve to a "
@@ -434,11 +533,11 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
             )
         )
 
-    # Only check the leaf certificate (first in chain) for signer-related issues
-    # This prevents reporting root CA or intermediate certs as application problems
-    # Also skip if the leaf is a timestamp certificate (as it's not a code-signing certificate)
-    leaf = sig_info.certs[0]
-    if not leaf.is_timestamp:
+    # Only the actual signing certificate is checked for signer-related
+    # issues — root/intermediate CAs and timestamp certs are not the
+    # application's problem.
+    leaf = sig_info.leaf
+    if leaf is not None:
         if leaf.is_expired:
             if sig_info.timestamp_present:
                 # Expired but timestamped -> informational
@@ -522,7 +621,7 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
                         "rather than one issued by a trusted public CA. "
                         "Self-signed certificates provide integrity checking "
                         "but no independent identity verification, and will "
-                        f"not be trusted by default on end-user machines."
+                        "not be trusted by default on end-user machines."
                     ),
                     remediation="Obtain a code-signing certificate from a trusted public CA for production releases.",
                     tags=["signature", "certificate", "self-signed"],
@@ -596,24 +695,30 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
 
 def _publisher_consistency_findings(all_sig_info: list[BinarySignatureInfo]) -> list[Finding]:
     """Cross-binary check: do all signed binaries in this app share a publisher?"""
+    # Signer (leaf) certificates only — CA/intermediate/timestamp certs in
+    # each chain are not "publishers" and made this fire on almost any folder.
     publisher_to_files: dict[str, list[str]] = {}
     for info in all_sig_info:
-        for cert in info.certs:
-            publisher_to_files.setdefault(cert.subject_cn, []).append(info.path)
+        if info.leaf is not None:
+            publisher_to_files.setdefault(info.leaf.subject_cn, []).append(info.path)
 
     if len(publisher_to_files) <= 1:
         return []
 
     findings: list[Finding] = []
     summary_lines = "; ".join(f"{pub}: {len(files)} file(s)" for pub, files in publisher_to_files.items())
+    # Anchor the finding on a file signed by the least-common publisher —
+    # the most likely odd one out.
+    minority_files = min(publisher_to_files.values(), key=len)
     findings.append(
         Finding(
             module="signature",
             rule_id="mismatched-publisher",
             title="Multiple distinct code-signing publishers within the same application",
             severity=Severity.MEDIUM,
-            file_path=", ".join(sorted({f for files in publisher_to_files.values() for f in files})),
+            file_path=sorted(minority_files)[0],
             evidence=summary_lines,
+            extra={"publishers": {pub: sorted(files) for pub, files in publisher_to_files.items()}},
             description=(
                 "Binaries within this application are signed by more than "
                 "one distinct publisher/subject. This can be legitimate "
@@ -659,15 +764,20 @@ def _auto_update_finding(pe_path: Path) -> Finding | None:
     exists or whether downloaded content is verified.
     """
     try:
-        data = pe_path.read_bytes()
+        data = pe_path.read_bytes().lower()
     except OSError:
         return None
 
-    strings_with_offsets = extract_strings_from_bytes(data)
-    joined_lower = "\n".join(s.lower() for s, _ in strings_with_offsets)
-
-    has_update_signal = any(kw in joined_lower for kw in UPDATE_KEYWORDS)
-    if not has_update_signal:
+    # Search raw bytes (ASCII and UTF-16LE forms) instead of running a full
+    # string extraction a third time for one keyword check.
+    matched_kw = next(
+        (
+            kw for kw in UPDATE_KEYWORDS
+            if kw.encode() in data or kw.encode("utf-16-le") in data
+        ),
+        None,
+    )
+    if matched_kw is None:
         return None
 
     pe_info = parse_pe(pe_path)
@@ -681,7 +791,6 @@ def _auto_update_finding(pe_path: Path) -> Finding | None:
     }
     has_trust_api = bool(all_funcs & TRUST_VERIFY_APIS)
 
-    matched_kw = next(kw for kw in UPDATE_KEYWORDS if kw in joined_lower)
     trust_import_note = (
         "recognized trust API import present"
         if has_trust_api
@@ -766,6 +875,25 @@ def run(
 
     # Publisher-consistency cross-checks only make sense across multiple
     # binaries; skip in single-file scope since there's nothing to compare.
+    unverified = [i.path for i in all_sig_info if i.is_signed and i.osslsigncode_verified is None]
+    if unverified:
+        # Structural parsing can't detect a file modified after signing —
+        # say so instead of letting the binaries look verified.
+        _add([Finding(
+            module="signature",
+            rule_id="signature-digest-not-verified",
+            title="Authenticode digest not verified for signed binaries",
+            severity=Severity.INFO,
+            file_path=unverified[0],
+            evidence=f"{len(unverified)} signed binary/binaries were not digest-verified "
+                     f"({'deep signature check disabled' if not use_osslsigncode else 'no verifier available: install osslsigncode'})",
+            description="Certificates were parsed structurally, but whether each file was modified after signing was not checked.",
+            remediation="Enable the deep signature check and install osslsigncode (or scan on Windows, where WinVerifyTrust is used).",
+            tags=["signature", "gap"],
+            confidence="High",
+            extra={"files": unverified},
+        )])
+
     if single_file is None:
         try:
             _add(_publisher_consistency_findings(all_sig_info))

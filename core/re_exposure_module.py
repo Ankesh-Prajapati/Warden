@@ -21,7 +21,6 @@ Covers:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
 import re
 
@@ -36,7 +35,6 @@ from core.pe_utils import (
     extract_strings_from_bytes,
     get_security_mitigations,
     get_version_strings,
-    is_pe_file,
     parse_pe,
 )
 from core.plugin_system import compile_yara_rules
@@ -235,7 +233,7 @@ def _mitigation_findings(pe_path: Path, mit: MitigationInfo) -> list[Finding]:
                 title="SafeSEH not enabled (32-bit binary)",
                 severity=Severity.MEDIUM,
                 file_path=str(pe_path),
-                evidence="No populated SEHandlerTable in load config directory, or IMAGE_DLLCHARACTERISTICS_NO_SEH set",
+                evidence="No populated SEHandlerTable in load config directory (and IMAGE_DLLCHARACTERISTICS_NO_SEH not set)",
                 description=(
                     f"This {bitness} binary does not appear to have SafeSEH "
                     f"enabled, leaving structured exception handler chains "
@@ -355,18 +353,13 @@ def _is_dotnet_assembly(pe_path: Path, pe_info: PEInfo) -> bool:
     return "mscoree.dll" in [d.lower() for d in pe_info.imported_dlls]
 
 
-def _dotnet_obfuscation_finding(pe_path: Path, pe_info: PEInfo, signatures: dict) -> Finding | None:
+def _dotnet_obfuscation_finding(
+    pe_path: Path, pe_info: PEInfo, signatures: dict, strings: list[str]
+) -> Finding | None:
     if not _is_dotnet_assembly(pe_path, pe_info):
         return None
 
-    try:
-        data = pe_path.read_bytes()
-    except OSError:
-        return None
-
-    strings_with_offsets = extract_strings_from_bytes(data)
-    joined = "\n".join(s for s, _ in strings_with_offsets)
-    joined_lower = joined.lower()
+    joined_lower = "\n".join(strings).lower()
 
     markers = signatures.get("dotnet_obfuscator_markers", [])
     matched_marker = next((m for m in markers if m.lower() in joined_lower), None)
@@ -648,7 +641,6 @@ def _manifest_findings(pe_path: Path, pe_info: PEInfo) -> list[Finding]:
     xml = pe_info.manifest_xml or ""
     if not xml:
         return []
-    lower = xml.lower()
 
     # Capture the actual declared value, not just "this keyword appeared"
     # — requestedExecutionLevel="asInvoker" is benign, "requireAdministrator"
@@ -693,9 +685,14 @@ def _manifest_findings(pe_path: Path, pe_info: PEInfo) -> list[Finding]:
     ui_access = attr_values.get("uiAccess", "").lower() == "true"
     is_elevated = exec_level in ("requireadministrator", "highestavailable") or auto_elevate
 
-    severity = Severity.HIGH if (auto_elevate or exec_level == "requireadministrator") else (
-        Severity.MEDIUM if (exec_level == "highestavailable" or ui_access) else Severity.INFO
-    )
+    # autoElevate silently bypasses the UAC prompt (High); requireAdministrator
+    # is normal for installers/uninstallers and only widens impact (Medium).
+    if auto_elevate:
+        severity = Severity.HIGH
+    elif exec_level in ("requireadministrator", "highestavailable") or ui_access:
+        severity = Severity.MEDIUM
+    else:
+        severity = Severity.INFO
     evidence = ", ".join(f'{k}="{v}"' for k, v in attr_values.items())
     return [Finding(
         module="re_exposure",
@@ -794,31 +791,38 @@ def run(
                 all_findings.append(f)
 
     for pe_path in find_pe_files(target_dir, single_file=single_file):
-        if scan_cache and scan_cache.unchanged(pe_path, "re_exposure"):
-            continue
         if progress_callback:
             progress_callback(str(pe_path))
+        if scan_cache:
+            cached = scan_cache.cached_findings(pe_path, "re_exposure")
+            if cached is not None:
+                _add(cached)
+                continue
 
         try:
-            pe_info = parse_pe(pe_path)
+            pe_info = parse_pe(pe_path, with_section_entropy=True)
             if not pe_info.is_valid_pe:
                 continue
 
+            # Extract strings once and share them across every check below.
+            strings = [s for s, _ in extract_strings_from_bytes(pe_path.read_bytes())]
             mit = get_security_mitigations(pe_path)
-            _add(_mitigation_findings(pe_path, mit))
-            _add(_packer_findings(pe_path, pe_info, signatures))
-            _add([_dotnet_obfuscation_finding(pe_path, pe_info, signatures)])
-            _add([_pdb_leak_finding(pe_path, pe_info)])
-            _add([_anti_debug_finding(pe_path, pe_info)])
-            data = pe_path.read_bytes()
-            strings = [s for s, _ in extract_strings_from_bytes(data)]
-            _add(_artifact_findings(pe_path, strings))
-            _add(_crypto_framework_findings(pe_path, pe_info, strings))
-            _add(_manifest_findings(pe_path, pe_info))
-            _add([_dependency_graph_finding(pe_path, pe_info)])
-            _add(_yara_findings(pe_path, yara_rules))
+            file_findings = [
+                *_mitigation_findings(pe_path, mit),
+                *_packer_findings(pe_path, pe_info, signatures),
+                _dotnet_obfuscation_finding(pe_path, pe_info, signatures, strings),
+                _pdb_leak_finding(pe_path, pe_info),
+                _anti_debug_finding(pe_path, pe_info),
+                *_artifact_findings(pe_path, strings),
+                *_crypto_framework_findings(pe_path, pe_info, strings),
+                *_manifest_findings(pe_path, pe_info),
+                _dependency_graph_finding(pe_path, pe_info),
+                *_yara_findings(pe_path, yara_rules),
+            ]
+            file_findings = [f for f in file_findings if f is not None]
+            _add(file_findings)
             if scan_cache:
-                scan_cache.mark_scanned(pe_path, "re_exposure", sha256_file(pe_path))
+                scan_cache.mark_scanned(pe_path, "re_exposure", sha256_file(pe_path), file_findings)
         except Exception as e:
             if error_callback:
                 error_callback(f"re_exposure: skipped '{pe_path}' after error: {e}")

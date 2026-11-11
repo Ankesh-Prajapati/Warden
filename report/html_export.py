@@ -12,7 +12,6 @@ import html
 from datetime import datetime
 from pathlib import Path
 
-from core.finding_grouping import group_finding_dicts
 from core.path_utils import normalize_target_path
 from core.scanner import ScanResult
 
@@ -755,18 +754,7 @@ def _render_dashboard(findings: list[dict], counts: dict) -> str:
 </div>"""
 
 
-def _group_findings(findings: list[dict]) -> list[dict]:
-    """Collapse findings that represent the same issue (same rule +
-    title + severity) into one entry, listing every affected file path
-    instead of repeating the whole finding block per file. Each location's
-    code context (when the module supplied one) travels with it so the
-    report can still show exactly where to look for every affected file,
-    not just the first one."""
-    return group_finding_dicts(findings)
-
-
 def _render_finding(f: dict, idx: int) -> str:
-    color = SEVERITY_COLORS.get(f["severity"], "#8b8f96")
     gradient = _severity_gradient(f["severity"])
     glyph = SEVERITY_GLYPHS.get(f["severity"], "\u25CF")
     conf_class = "confidence-low" if f.get("confidence") == "Low" else ""

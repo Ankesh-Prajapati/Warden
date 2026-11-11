@@ -46,8 +46,8 @@ from core.indicator_utils import (
 )
 from core.models import Finding, Severity
 
-URL_RE = re.compile(r"https?://[^\s\"'<>]{4,300}")
 UPDATE_KEYWORDS = ("update", "autoupdate", "upgrade", "appimageupdate")
+UPDATE_URL_KEYWORDS = ("update", "upgrade", "release", "download", "appcast", "zsync", "latest")
 TRUST_KEYWORDS = ("gpg", "signature", "sha256sum", "verify", "checksum", "publickey")
 INVENTORY_TAG = "inventory"
 
@@ -149,15 +149,15 @@ def _application_discovery(target_dir: Path, elf_files: list[Path]) -> list[Find
                 tags=[INVENTORY_TAG, "snap"],
             ))
 
-    findings.append(_mk(
-        "Application Discovery", "ELF Executables Discovered",
-        "Info" if elf_files else "Warning",
-        evidence=f"{len(elf_files)} ELF file(s) found under {target_dir}",
-        description="Inventory of all ELF binaries/libraries found in the application tree.",
-        recommendation="Confirm every shipped binary is expected/signed by the vendor's build process.",
-        file_path=str(target_dir),
-        tags=[INVENTORY_TAG],
-    ))
+    if elf_files:  # "0 ELF files" is noise on a Windows/macOS target, not a finding
+        findings.append(_mk(
+            "Application Discovery", "ELF Executables Discovered", "Info",
+            evidence=f"{len(elf_files)} ELF file(s) found",
+            description="Inventory of all ELF binaries/libraries found in the application tree.",
+            recommendation="Confirm every shipped binary is expected/signed by the vendor's build process.",
+            file_path=str(target_dir),
+            tags=[INVENTORY_TAG],
+        ))
     return findings
 
 
@@ -280,14 +280,18 @@ def _binary_analysis(elf_files: list[Path]) -> list[Finding]:
     return findings
 
 
-def _config_and_secrets(target_dir: Path, rules_dir, enable_entropy: bool, single_file) -> list[Finding]:
+def _config_and_secrets(
+    target_dir: Path, rules_dir, enable_entropy: bool, single_file,
+    include_secrets: bool = True, error_callback=None,
+) -> list[Finding]:
     """Reuses Module 1's rule+entropy engine, then re-buckets the resulting
     findings into the Linux assessment's category taxonomy instead of
-    duplicating that scanning logic."""
+    duplicating that scanning logic. Skipped when the secrets module runs
+    in the same scan, so each secret is reported once."""
     raw = secrets_module.run(
         target_dir=target_dir, rules_dir=rules_dir, enable_entropy=enable_entropy,
-        scan_pe_strings=False, single_file=single_file,
-    )
+        scan_pe_strings=False, single_file=single_file, error_callback=error_callback,
+    ) if include_secrets else []
     findings: list[Finding] = []
     for f in raw:
         ext = Path(f.file_path).suffix.lower()
@@ -304,7 +308,7 @@ def _config_and_secrets(target_dir: Path, rules_dir, enable_entropy: bool, singl
         f.tags = list(set(f.tags + ["linux", category.lower().replace(" ", "-")]))
         findings.append(f)
 
-    config_files = [p for p in iter_all_files(target_dir)
+    config_files = [p for p in iter_all_files(target_dir, single_file=single_file)
                     if p.suffix.lower() in {".conf", ".cfg", ".ini", ".yaml", ".yml", ".json", ".toml", ".env"}]
     if config_files:
         findings.append(_mk(
@@ -361,7 +365,7 @@ def _certificate_analysis(target_dir: Path) -> list[Finding]:
     return findings
 
 
-def _update_mechanism_analysis(target_dir: Path, elf_files: list[Path]) -> list[Finding]:
+def _update_mechanism_analysis(target_dir: Path, elf_files: list[Path], single_file=None) -> list[Finding]:
     findings: list[Finding] = []
     from core.pe_utils import extract_strings_from_bytes
 
@@ -373,7 +377,7 @@ def _update_mechanism_analysis(target_dir: Path, elf_files: list[Path]) -> list[
             continue
         strings_only = [s for s, _ in extract_strings_from_bytes(data)]
         candidates.append((str(p), "\n".join(strings_only)))
-    for p in iter_all_files(target_dir):
+    for p in iter_all_files(target_dir, single_file=single_file):
         if p.suffix.lower() in {".conf", ".cfg", ".ini", ".json", ".yaml", ".yml", ".desktop"}:
             content = read_text_safely(p)
             if content:
@@ -382,10 +386,12 @@ def _update_mechanism_analysis(target_dir: Path, elf_files: list[Path]) -> list[
     seen_urls = set()
     for path_str, text in candidates:
         lowered = text.lower()
+        # The file-level keyword check alone is far too loose — nearly every
+        # binary contains "update" — so the URL itself must look update-related.
         if not any(k in lowered for k in UPDATE_KEYWORDS):
             continue
-        for url in URL_RE.findall(text):
-            if url in seen_urls:
+        for url in extract_urls(text, max_results=50):
+            if url in seen_urls or not any(k in url.lower() for k in UPDATE_URL_KEYWORDS):
                 continue
             seen_urls.add(url)
             if url.startswith("http://"):
@@ -570,9 +576,9 @@ def _startup_and_scheduling(target_dir: Path) -> list[Finding]:
     return findings
 
 
-def _tool_gap_findings(target_dir: Path) -> list[Finding]:
+def _tool_gap_findings(target_dir: Path, elf_files: list[Path]) -> list[Finding]:
     findings: list[Finding] = []
-    if shutil.which("readelf") is None:
+    if elf_files and shutil.which("readelf") is None:
         findings.append(_mk(
             "Binary Analysis", "readelf Not Available", "Info",
             evidence="readelf was not found on PATH",
@@ -589,9 +595,10 @@ def _tool_gap_findings(target_dir: Path) -> list[Finding]:
 
 
 def _single_file_discovery(single_file: Path, elf_files: list[Path]) -> list[Finding]:
+    if not elf_files:  # not an ELF target — nothing Linux-specific to say
+        return []
     return [_mk(
-        "Application Discovery", "Single File Scope",
-        "Info" if elf_files else "Warning",
+        "Application Discovery", "Single File Scope", "Info",
         evidence=f"Single-file Linux scan target: {single_file}",
         description="The Linux module is restricted to the selected file; folder-level package, startup, certificate, and permission inventory is skipped.",
         recommendation="Run a folder scan against the extracted application tree for full Linux thick-client coverage.",
@@ -607,6 +614,7 @@ def run(
     progress_callback=None,
     error_callback=None,
     include_inventory: bool = True,
+    include_secrets: bool = True,
 ) -> list[Finding]:
     """Entry point for the Linux thick-client static assessment module."""
     target_dir = Path(target_dir)
@@ -618,7 +626,10 @@ def run(
             progress_callback(str(p))
 
     findings: list[Finding] = []
-    findings.extend(_tool_gap_findings(target_dir))
+    findings.extend(_tool_gap_findings(target_dir, elf_files))
+    secrets_phase = lambda: _config_and_secrets(  # noqa: E731
+        target_dir, rules_dir, enable_entropy, single_file, include_secrets, error_callback
+    )
 
     def _phase(name: str, func):
         try:
@@ -630,8 +641,8 @@ def run(
     if single_file is not None:
         _phase("application-discovery", lambda: _single_file_discovery(single_file, elf_files))
         _phase("binary-analysis", lambda: _binary_analysis(elf_files))
-        _phase("secrets", lambda: _config_and_secrets(target_dir, rules_dir, enable_entropy, single_file))
-        _phase("update-mechanism", lambda: _update_mechanism_analysis(target_dir, elf_files))
+        _phase("secrets", secrets_phase)
+        _phase("update-mechanism", lambda: _update_mechanism_analysis(target_dir, elf_files, single_file))
         _phase("network-artifacts", lambda: _network_artifacts(findings))
         if not include_inventory:
             findings = [f for f in findings if INVENTORY_TAG not in f.tags]
@@ -639,7 +650,7 @@ def run(
 
     _phase("application-discovery", lambda: _application_discovery(target_dir, elf_files))
     _phase("binary-analysis", lambda: _binary_analysis(elf_files))
-    _phase("secrets", lambda: _config_and_secrets(target_dir, rules_dir, enable_entropy, single_file))
+    _phase("secrets", secrets_phase)
     _phase("certificate-analysis", lambda: _certificate_analysis(target_dir))
     _phase("update-mechanism", lambda: _update_mechanism_analysis(target_dir, elf_files))
     _phase("file-permissions", lambda: _file_permission_analysis(target_dir))
