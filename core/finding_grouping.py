@@ -6,7 +6,7 @@ import hashlib
 from typing import Any
 
 from core.models import Finding
-from core.path_utils import normalize_finding_path
+from core.path_utils import localize_poc, normalize_finding_path
 
 
 def _occurrence_identity(finding: dict[str, Any], normalized_path: str) -> tuple:
@@ -52,7 +52,10 @@ def group_finding_dicts(
         occurrence.pop("_identity_evidence", None)
         occurrence["file_path"] = normalized_path
         original_path = str(f["file_path"])
-        occurrence["poc"] = str(f.get("poc") or "").replace(original_path, normalized_path)
+        occurrence["poc"] = localize_poc(
+            str(f.get("poc") or ""), original_path, normalized_path,
+            (f.get("extra") or {}).get("extracted_from"), scan_root,
+        )
         occurrence["extra"] = deepcopy(f.get("extra") or {})
         if occurrence["extra"].get("extracted_from"):
             occurrence["extra"]["extracted_from"] = normalize_finding_path(

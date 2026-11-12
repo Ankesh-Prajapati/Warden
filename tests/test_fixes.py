@@ -220,6 +220,49 @@ def test_archive_size_cap_enforced_before_extraction():
         archive_extractor.cleanup(result)
 
 
+def test_asar_is_unpacked():
+    import struct
+    body = b"const apiKey = 1;\n"
+    index = json.dumps({"files": {"main.js": {"offset": "0", "size": len(body)},
+                                  "..": {"files": {"evil.js": {"offset": "0", "size": 1}}}}}).encode()
+    pad = (4 - len(index) % 4) % 4
+    header = struct.pack("<IIII", 4, len(index) + 8 + pad, len(index) + 4 + pad, len(index)) + index + b"\0" * pad
+    asar = Path(tempfile.mkdtemp(prefix="warden_test_")) / "app.asar"
+    asar.write_bytes(header + body)
+    dest = asar.parent / "out"
+    assert archive_extractor._extract_asar(asar, dest)
+    assert (dest / "main.js").read_bytes() == body
+    assert not (asar.parent / "evil.js").exists()  # crafted index cannot escape
+
+
+def test_binary_noise_filters():
+    from core.re_exposure_module import _looks_like_plausible_domain
+    from core.rules import load_rules
+    for junk in ("ENE.cN", "OIw.dE", "N1O.FR", "fRa.ch"):
+        assert not _looks_like_plausible_domain(junk), junk
+    for real in ("Muldersoft.com", "gmx.de", "crl.microsoft.com"):
+        assert _looks_like_plausible_domain(real), real
+    rules = {r.id: r.pattern for r in load_rules()}
+    assert not rules["generic-password-assignment"].search("password:!0,range:!0,search:!0")
+    assert rules["generic-password-assignment"].search("password = P%ssw0rd!Real")
+    from core.secrets_module import _looks_like_lookup_table, _scan_text_content
+    for table in ("0123456789abcdefABCDEFxX+-pPiInN", "bcdfghiklmnoprstuvwxyz", "000102030405060708090a0b0c0d0e0f"):
+        assert _looks_like_lookup_table(table), table
+    assert not _looks_like_lookup_table("aZ3k_P9xQm2_Lp7R4tN8")
+    label = _scan_text_content("x={password`:`Show password`}\n", "a.js", load_rules(), False)
+    assert not [f for f in label if f.rule_id == "generic-password-assignment"]
+    assert not rules["internal-url"].search("https://react.dev/errors/")
+    assert rules["internal-url"].search("https://api.dev.acme.com/x")
+
+
+def test_poc_for_bundled_file_is_runnable():
+    from core.path_utils import localize_poc
+    tmp = r"C:\T\warden_extract_ab\$PLUGINSDIR\app-64.7z__unpacked\resources\app.asar__unpacked\main.js"
+    poc = localize_poc(f"1. Location: {tmp}\n2. dumpbin \"{tmp}\"", tmp, "x > y", r"C:\Dl\Setup.exe", r"C:\Dl")
+    assert "7z x 'Setup.exe' -o'warden_extracted'" in poc
+    assert "npx --yes @electron/asar extract" in poc and 'dumpbin "$f"' in poc and "warden_extract_ab" not in poc
+
+
 if __name__ == "__main__":
     import logging
     logging.disable(logging.CRITICAL)

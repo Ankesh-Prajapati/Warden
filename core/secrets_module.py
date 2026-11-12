@@ -272,6 +272,23 @@ def _looks_like_bignum_constant(candidate: str) -> bool:
     return len(candidate) >= 48 and bool(re.fullmatch(r"[0-9A-F]+", candidate))
 
 
+def _looks_like_lookup_table(candidate: str) -> bool:
+    """Parser/encoder tables: mostly-ascending alphabets ("0123456789abcdef
+    ABCDEFxX+-pPiInN", "bcdfghiklmnop...") or hex byte counters
+    ("000102030405..."). Random secrets ascend on ~half of adjacent pairs."""
+    if len(candidate) < 16:
+        return False
+    rising = sum(b > a for a, b in zip(candidate, candidate[1:]))
+    if rising >= 0.8 * (len(candidate) - 1):
+        return True
+    chunks = [candidate[i:i + 2] for i in range(0, len(candidate) - 1, 2)]
+    try:
+        nums = [int(c, 16) for c in chunks]
+    except ValueError:
+        return False
+    return sum(b == a + 1 for a, b in zip(nums, nums[1:])) >= 0.8 * (len(nums) - 1)
+
+
 def _looks_like_case_paired_alphabet(candidate: str) -> bool:
     """Format-specifier / alphabet tables like "aAbBcCdDeFgGhH..." (strftime
     flags): letters only, built from adjacent same-letter case pairs. In
@@ -413,6 +430,7 @@ def _entropy_candidate_has_benign_context(
         or _looks_like_crypto_algorithm_identifier(candidate)
         or _looks_like_deterministic_hex_table(candidate)
         or _looks_like_case_paired_alphabet(candidate)
+        or _looks_like_lookup_table(candidate)
     ):
         return True
 
@@ -1006,6 +1024,10 @@ def _scan_text_content(
                     and not _has_network_context(content, match.start())
                 ):
                     continue
+            if rule.id == "generic-password-assignment" and re.search(
+                r"[:=][ \t]*[\"'`]?[A-Za-z]+(?: [A-Za-z]+)+[.:!?…]*[\"'`]?$", evidence_raw
+            ):
+                continue  # UI label / i18n string ("Show password", "Enter your password")
             if rule.id in ("generic-password-assignment", "odbc-pwd") and _looks_like_sql_noise(evidence_raw):
                 # A password/PWD= regex has no way to know where a real
                 # assignment's value ends versus adjacent unrelated text —

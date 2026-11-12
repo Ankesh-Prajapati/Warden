@@ -28,9 +28,11 @@ Safety:
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -43,11 +45,13 @@ from core import NO_CONSOLE
 # resources even though the file itself is "just an executable".
 ARCHIVE_EXTENSIONS = {
     ".zip", ".7z", ".cab", ".msi", ".iso", ".rar", ".jar",
-    ".exe", ".dll",
+    ".exe", ".dll", ".asar",
 }
 
 DEFAULT_MAX_DEPTH = 2
-DEFAULT_MAX_TOTAL_BYTES = 500 * 1024 * 1024  # 500 MB extracted-content cap
+# An unpacked Electron/Chromium app alone is ~400 MB, on top of the ~130 MB
+# payload archive it came from; 500 MB silently skipped the actual app.
+DEFAULT_MAX_TOTAL_BYTES = 2048 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 60
 
 
@@ -98,6 +102,39 @@ def _safe_join(base: Path, *parts: str) -> Path:
     if base_resolved not in candidate.parents and candidate != base_resolved:
         raise ValueError(f"Refusing to use path outside extraction root: {candidate}")
     return candidate
+
+
+def _extract_asar(asar: Path, dest: Path) -> bool:
+    """Unpack an Electron ASAR (7z cannot read it): a pickle header whose
+    uint32 at 4 is the header size and at 12 the JSON index length, then the
+    JSON index, then file bodies at base + offset. `unpacked` entries already
+    sit next to the archive in app.asar.unpacked/ and are scanned from there."""
+    try:
+        with open(asar, "rb") as f:
+            head = f.read(16)
+            header_size, json_len = struct.unpack_from("<I", head, 4)[0], struct.unpack_from("<I", head, 12)[0]
+            index = json.loads(f.read(json_len))
+            base = 8 + header_size
+            stack: list[tuple[dict, tuple[str, ...]]] = [(index, ())]
+            while stack:
+                node, rel = stack.pop()
+                for name, entry in (node.get("files") or {}).items():
+                    parts = rel + (name,)
+                    if "files" in entry:
+                        stack.append((entry, parts))
+                        continue
+                    if entry.get("unpacked") or "offset" not in entry:
+                        continue
+                    try:
+                        out = _safe_join(dest, *parts)
+                    except ValueError:
+                        continue  # path-escape attempt in a crafted index
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    f.seek(base + int(entry["offset"]))
+                    out.write_bytes(f.read(int(entry["size"])))
+        return True
+    except (OSError, ValueError, KeyError, TypeError, struct.error):
+        return False
 
 
 def _extract_one(sevenzip: str, archive_path: Path, dest_dir: Path, timeout: int) -> tuple[bool, str]:
@@ -167,13 +204,17 @@ def extract_archive_recursive(
             result.warnings.append(f"Max nesting depth ({max_depth}) reached, stopped at {current.name}")
             continue
 
-        listing = _list_archive(sevenzip, current, timeout_seconds)
-        if listing is None:
-            # Not every .exe/.dll IS an archive — 7z failing on a plain
-            # PE with no embedded archive payload is the expected common
-            # case, not an error worth surfacing.
-            continue
-        listed, kind = listing
+        is_asar = current.suffix.lower() == ".asar"
+        if is_asar:
+            listed, kind = current.stat().st_size, "ASAR"
+        else:
+            listing = _list_archive(sevenzip, current, timeout_seconds)
+            if listing is None:
+                # Not every .exe/.dll IS an archive — 7z failing on a plain
+                # PE with no embedded archive payload is the expected common
+                # case, not an error worth surfacing.
+                continue
+            listed, kind = listing
         if seen_total_bytes + listed > max_total_bytes:
             result.truncated = True
             result.warnings.append(
@@ -183,7 +224,7 @@ def extract_archive_recursive(
             continue
 
         dest.mkdir(parents=True, exist_ok=True)
-        ok, err = _extract_one(sevenzip, current, dest, timeout_seconds)
+        ok = _extract_asar(current, dest) if is_asar else _extract_one(sevenzip, current, dest, timeout_seconds)[0]
         if not ok:
             continue
         if kind == "PE":
