@@ -17,8 +17,10 @@ Static analysis only — no runtime loader tracing, no actual hijack payloads.
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path, PureWindowsPath
 
 import yaml
@@ -303,7 +305,7 @@ def _search_order_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
         return Finding(
             module="dll_hijack",
             rule_id="dll-search-order-exposure",
-            title="Dynamic library loading without safe search-order controls",
+            title="DLL search-order hijacking exposure: LoadLibrary without a restricted search path",
             # A DLL inherits its host process's search order (e.g. the
             # installer's SetDefaultDllDirectories), so its imports alone are weak.
             severity=Severity.LOW if pe_info.is_dll else Severity.MEDIUM,
@@ -343,6 +345,16 @@ def _search_order_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
     return None
 
 
+@lru_cache(maxsize=1)
+def _system32_dlls() -> frozenset[str]:
+    """Lower-cased DLL names in %SystemRoot%\\System32 (empty off Windows)."""
+    root = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+    try:
+        return frozenset(p.name.lower() for p in root.iterdir() if p.suffix.lower() in (".dll", ".cpl", ".drv", ".ocx"))
+    except OSError:
+        return frozenset()
+
+
 def _phantom_dll_findings(
     pe_path: Path,
     pe_info: PEInfo,
@@ -364,6 +376,15 @@ def _phantom_dll_findings(
                 if lname == pattern:
                     is_known_system = True
                     break
+        # API-set contracts (api-ms-win-*, ext-ms-*) are resolved by the
+        # loader, never from disk; .cpl/.drv/.ocx imports are OS components;
+        # and a DLL shipped in this machine's System32 is an OS DLL.
+        if (
+            lname.startswith(("api-ms-win-", "ext-ms-"))
+            or lname.endswith((".cpl", ".drv"))
+            or lname in _system32_dlls()
+        ):
+            is_known_system = True
         if is_known_system or lname in local_dll_inventory:
             continue  # resolves locally or is a known system DLL — not phantom (writable-dir risk covered separately)
 

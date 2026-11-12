@@ -263,6 +263,63 @@ def test_poc_for_bundled_file_is_runnable():
     assert "npx --yes @electron/asar extract" in poc and 'dumpbin "$f"' in poc and "warden_extract_ab" not in poc
 
 
+def test_electron_fuses_and_webpreferences():
+    from core import electron_checks as ec
+    exe = Path(tempfile.mkdtemp(prefix="warden_test_")) / "App.exe"
+    blob = b"MZ" + ec.FUSE_SENTINEL + bytes([1, 8]) + b"10000100" + b" Chrome/120.0.1.2 Electron/28.0.0 "
+    rules = {f.rule_id for f in ec.check_runtime(exe, blob, signed=False)}
+    assert {"electron-fuse-runasnode", "electron-fuse-asar-integrity-off", "outdated-electron-runtime"} <= rules, rules
+    assert "electron-asar-integrity-unsigned" not in rules  # integrity is OFF here: separate finding
+    hard = {f.rule_id for f in ec.check_runtime(exe, blob.replace(b"10000100", b"00001100"), signed=False)}
+    assert "electron-fuse-runasnode" not in hard and "electron-asar-integrity-unsigned" in hard
+
+    root = exe.parent / "app"; root.mkdir()
+    (root / "package.json").write_text('{"main": "main.js"}')
+    (root / "main.js").write_text(
+        "const w = new BrowserWindow({ webPreferences: { nodeIntegration: true, contextIsolation: !1 } });\n"
+        "w.loadURL('https://x');\n")
+    found = {f.rule_id: f for f in ec.check_app_sources(root.parent)}
+    assert {"electron-node-integration", "electron-context-isolation-off", "electron-navigation-unrestricted"} <= set(found)
+    assert found["electron-node-integration"].line_number == 1
+
+
+def test_outdated_nsis_and_nonprod_api():
+    from core.pe_utils import PEInfo
+    from core.re_exposure_module import _outdated_installer_finding
+    from core.rules import load_rules
+    info = PEInfo(path="x.exe", is_valid_pe=True)
+    info.manifest_xml = "<description>Nullsoft Install System v3.04</description>"
+    assert _outdated_installer_finding(Path("x.exe"), info).rule_id == "outdated-nsis-installer"
+    info.manifest_xml = "<description>Nullsoft Install System v3.10</description>"
+    assert _outdated_installer_finding(Path("x.exe"), info) is None
+    rule = {r.id: r.pattern for r in load_rules()}["non-production-api-endpoint"]
+    assert rule.search('"https://ab12.execute-api.ap-south-1.amazonaws.com/int/pos"')
+    assert not rule.search('"https://ab12.execute-api.ap-south-1.amazonaws.com/prod/pos"')
+
+
+def test_js_identifiers_and_api_sets_are_not_noise():
+    from core.dll_hijack_module import _phantom_dll_findings
+    from core.pe_utils import PEInfo
+    from core.rules import load_rules
+    from core.secrets_module import _scan_text_content
+    js = "e._Conv3DBackpropFilterV2=function(){};t=a.UNSAFE_componentWillReceiveProps==null;\n"
+    assert not [f for f in _scan_text_content(js, "a.js", load_rules(), True) if f.rule_id == "high-entropy-string"]
+    info = PEInfo(path="x.exe", is_valid_pe=True)
+    info.imported_dlls = ["api-ms-win-core-path-l1-1-0.dll", "bthprops.cpl", "acme_private_helper.dll"]
+    names = [f.title for f in _phantom_dll_findings(Path("x.exe"), info, set(), set())]
+    assert names == ["Unbundled DLL import: acme_private_helper.dll"], names
+
+
+def test_inventory_excluded_from_counts():
+    target = _target({"app.config": 'aws_key = AKIAIOSFODNN7ABCDEFG\n'})
+    result = run_scan(target, modules=["secrets"], extract_archives=False)
+    inv = Finding("re_exposure", "binary-dependency-graph", "t", Severity.INFO, str(target / "a.exe"), "KERNEL32.dll")
+    result.inventory.append(inv)
+    data = result.to_dict()
+    assert data["inventory"] and all(f["rule_id"] != "binary-dependency-graph" for f in data["findings"])
+    assert sum(data["summary"]["info_unique"].values()) == sum(f["severity"] == "Info" for f in data["findings"])
+
+
 if __name__ == "__main__":
     import logging
     logging.disable(logging.CRITICAL)

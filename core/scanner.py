@@ -36,10 +36,32 @@ class ScanCancelled(BaseException):
     failed" while the scan carried on."""
 
 
+# Reverse-engineering inventory: useful context for a tester, but not a
+# security issue. Reported in a separate appendix, never in the findings
+# list or severity counts.
+INVENTORY_RULES = frozenset({
+    "binary-dependency-graph", "interesting-strings", "compiler-framework-detected",
+    "crypto-usage-detected", "no-anti-debug-apis-detected", "certificate-chain-summary",
+    "signature-timestamp-present", "acl-check-limited", "embedded-manifest-present",
+    "electron-hardening-summary", "auto-update-endpoint",
+    # A timestamped signature stays valid after the certificate expires.
+    "expired-signing-certificate-timestamped",
+})
+
+
+def is_inventory(f: Finding) -> bool:
+    if f.rule_id in INVENTORY_RULES or f.rule_id.startswith("extracted-"):
+        return True
+    # asInvoker / uiAccess=false is the safe default, not an observation.
+    return f.rule_id == "manifest-privilege-settings" and f.severity == Severity.INFO
+
+
 class ScanResult:
-    def __init__(self, metadata: ScanMetadata, findings: list[Finding], module_errors: list[str] | None = None):
+    def __init__(self, metadata: ScanMetadata, findings: list[Finding], module_errors: list[str] | None = None,
+                 inventory: list[Finding] | None = None):
         self.metadata = metadata
         self.findings = findings
+        self.inventory = inventory or []
         # Non-fatal problems encountered during the scan (a module crashed,
         # a file was unreadable, etc). The scan still completes and returns
         # every finding collected up to that point — this list is purely
@@ -117,6 +139,7 @@ class ScanResult:
             },
             "summary": self.summary_counts(),
             "findings": grouped_findings,
+            "inventory": group_findings(self.inventory, scan_root=root),
             "module_errors": [
                 normalize_diagnostic_paths(error, root)
                 for error in self.module_errors
@@ -403,4 +426,6 @@ def run_scan(
     metadata.finished_at = datetime.now(timezone.utc).isoformat()
     scan_cache.save()
 
-    return ScanResult(metadata, all_findings, module_errors)
+    inventory = [f for f in all_findings if is_inventory(f)]
+    findings = [f for f in all_findings if not is_inventory(f)]
+    return ScanResult(metadata, findings, module_errors, inventory=inventory)

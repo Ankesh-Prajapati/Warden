@@ -1,14 +1,19 @@
 """
 HTML report generation for Warden scan results.
 
-Self-contained single-file HTML output (no external assets). Findings are
-grouped by module into collapsible sections, with a top-level risk summary
-banner, severity filter bar, search, and copy-to-clipboard PoC blocks.
+Self-contained single-file HTML output (no external assets): report header
+with scan metadata, executive summary with severity distribution, a compact
+findings index, detailed findings (searchable / filterable / expandable,
+copyable evidence and PoC blocks), scan notes, and a reverse-engineering
+inventory appendix. Presentation only: all content comes from
+ScanResult.to_dict(), so the JSON export and this report always agree.
 """
 from __future__ import annotations
 
 import base64
 import html
+import re
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
@@ -17,45 +22,14 @@ from core.scanner import ScanResult
 
 SEVERITY_ORDER = ["Critical", "High", "Medium", "Low", "Info"]
 
-SEVERITY_COLORS = {
-    "Critical": "#e0645c",
-    "High": "#d9944f",
-    "Medium": "#d0b352",
-    "Low": "#6f9bd8",
-    "Info": "#8b8f96",
-}
-
-# Presentational-only: two-stop gradients derived from the same severity
-# colors above, used purely for premium-looking badges/cards/heatmap cells.
-# Carries no data and does not affect severity logic or JSON output.
-SEVERITY_GRADIENTS = {
-    "Critical": ("#ff7a70", "#c23b39"),
-    "High": ("#ffab6b", "#c2660f"),
-    "Medium": ("#f3d16a", "#b8860b"),
-    "Low": ("#8db6ff", "#3f68d6"),
-    "Info": ("#b0b6c2", "#666c78"),
-}
-
-SEVERITY_GLYPHS = {
-    "Critical": "\u2716",   # heavy multiplication x
-    "High": "\u25B2",       # triangle
-    "Medium": "\u25CF",     # circle
-    "Low": "\u25C6",        # diamond
-    "Info": "\u2139",       # info
-}
-
-
-def _severity_gradient(sev: str) -> str:
-    c1, c2 = SEVERITY_GRADIENTS.get(sev, ("#9aa0ab", "#666c78"))
-    return f"linear-gradient(135deg, {c1}, {c2})"
-
 MODULE_LABELS = {
-    "secrets": "Secrets & Config Exposure",
-    "dll_hijack": "DLL Hijacking Detection",
-    "signature": "Signature / Integrity Check",
-    "re_exposure": "RE / Anti-Tamper Exposure",
-    "linux": "Linux Thick-Client Assessment",
-    "macos": "macOS Thick-Client Assessment",
+    "secrets": "Secrets & Configuration",
+    "dll_hijack": "DLL Hijacking",
+    "signature": "Code Signing & Integrity",
+    "re_exposure": "Binary Hardening & RE Exposure",
+    "linux": "Linux Thick Client",
+    "macos": "macOS Thick Client",
+    "reputation": "Reputation (VirusTotal)",
 }
 
 MITRE_BY_TAG = {
@@ -68,6 +42,7 @@ MITRE_BY_TAG = {
     "anti-debug": "T1497 Virtualization/Sandbox Evasion",
     "registry-key": "T1112 Modify Registry",
     "named-pipe": "T1559 Inter-Process Communication",
+    "fuse": "T1218 System Binary Proxy Execution",
 }
 
 CWE_BY_TAG = {
@@ -79,545 +54,309 @@ CWE_BY_TAG = {
     "signature": "CWE-347 Improper Verification of Cryptographic Signature",
     "debug-setting": "CWE-489 Active Debug Code",
     "tls-setting": "CWE-295 Improper Certificate Validation",
+    "tls": "CWE-295 Improper Certificate Validation",
+    "outdated-component": "CWE-1104 Use of Unmaintained Third-Party Components",
+    "webpreferences": "CWE-1188 Insecure Default Initialization",
+    "navigation": "CWE-601 Open Redirect / Untrusted Navigation",
+    "transport": "CWE-319 Cleartext Transmission of Sensitive Information",
+    "environment": "CWE-489 Active Debug Code",
+}
+
+RISK_TEXT = {
+    "Critical": "Critical findings were identified that require immediate remediation before release.",
+    "High": "High-severity findings were identified and should be remediated before release.",
+    "Medium": "Medium-severity findings were identified; remediation is recommended in the next release cycle.",
+    "Low": "Only low-severity findings were identified; address them as part of normal hardening.",
+    "None": "No findings above informational severity were identified by the modules run in this scan.",
 }
 
 
 def _load_brand_logo_tag() -> str:
-    """Embed the real Warden logo as a base64 data URI so the report stays
-    a single self-contained HTML file with no external image asset."""
+    """Embed the Warden logo as a data URI so the report stays one file."""
     logo_path = Path(__file__).resolve().parent.parent / "assets" / "logo_report.png"
     try:
         data = base64.b64encode(logo_path.read_bytes()).decode("ascii")
-        return f'<img class="badge-icon" src="data:image/png;base64,{data}" width="46" height="46" alt="Warden">'
+        return f'<img class="brand-logo" src="data:image/png;base64,{data}" alt="Warden">'
     except Exception:
-        # Fallback glyph if the asset is ever missing, so report generation
-        # never fails just because the logo file wasn't shipped alongside it.
-        return (
-            '<svg class="badge-icon" width="26" height="26" viewBox="0 0 34 34" '
-            'xmlns="http://www.w3.org/2000/svg">'
-            '<path d="M5.4 0.7 H28.6 L34 5.4 V15.6 L17 33.3 L0 15.6 V5.4 Z" fill="#6d8cf0"/>'
-            '<polyline points="7.5,10.2 12.2,21.1 17,13.6 21.8,21.1 26.5,10.2" fill="none" '
-            'stroke="#11131a" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>'
-            "</svg>"
-        )
+        return ""
 
 
-_BRAND_SVG = _load_brand_logo_tag()
+_BRAND_LOGO = _load_brand_logo_tag()
 
 _STYLE = """
 :root {
-  --bg: #0a0b0e;
-  --bg-radial: radial-gradient(1200px 600px at 15% -10%, rgba(109,140,240,.08), transparent 60%),
-               radial-gradient(900px 500px at 100% 0%, rgba(143,109,240,.06), transparent 55%);
-  --panel: #14161b;
-  --panel-alt: #101216;
-  --panel-elevated: #191c22;
-  --border: #22252c;
-  --border-soft: #1b1e24;
-  --text: #edeef2;
-  --text-secondary: #b4b9c4;
-  --muted: #868c98;
-  --accent: #6d8cf0;
-  --accent-soft: #9db0f5;
-  --accent-dim: rgba(109,140,240,.14);
-  --radius-lg: 14px;
-  --radius-md: 10px;
-  --radius-sm: 7px;
-  --shadow-card: 0 1px 2px rgba(0,0,0,.24), 0 8px 24px -12px rgba(0,0,0,.5);
-  --shadow-card-hover: 0 2px 4px rgba(0,0,0,.28), 0 16px 40px -16px rgba(0,0,0,.6);
-  --ease: cubic-bezier(.2,.7,.3,1);
+  --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f9fafb; --code-bg: #f4f5f7;
+  --border: #e3e6ea; --border-strong: #cfd4da;
+  --text: #16191d; --text-2: #3d4450; --muted: #6b7280;
+  --link: #2451b7; --focus: #2451b7;
+  --crit: #b42318; --high: #c4320a; --med: #a15c07; --low: #1d5bbf; --info: #5b6472;
+  --crit-bg: #fef3f2; --high-bg: #fff4ed; --med-bg: #fffaeb; --low-bg: #eff4ff; --info-bg: #f2f4f7;
+  --mono: "Cascadia Mono", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+  --sans: Inter, "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
 }
-:root[data-theme="light"] {
-  --bg: #f3f4f7;
-  --bg-radial: radial-gradient(1200px 600px at 15% -10%, rgba(58,91,217,.05), transparent 60%),
-               radial-gradient(900px 500px at 100% 0%, rgba(143,109,240,.04), transparent 55%);
-  --panel: #ffffff;
-  --panel-alt: #eef0f3;
-  --panel-elevated: #ffffff;
-  --border: #dbdfe5;
-  --border-soft: #e6e9ed;
-  --text: #191b1f;
-  --text-secondary: #454b54;
-  --muted: #6b7280;
-  --accent: #3a5bd9;
-  --accent-soft: #2f4bb8;
-  --accent-dim: rgba(58,91,217,.10);
-  --shadow-card: 0 1px 2px rgba(20,25,35,.06), 0 8px 20px -14px rgba(20,25,35,.16);
-  --shadow-card-hover: 0 2px 6px rgba(20,25,35,.08), 0 14px 32px -16px rgba(20,25,35,.20);
+:root[data-theme="dark"] {
+  --bg: #0f1114; --surface: #16191d; --surface-2: #1b1f24; --code-bg: #111418;
+  --border: #2a2f36; --border-strong: #3a414a;
+  --text: #e7e9ec; --text-2: #b9bfc8; --muted: #8a919c;
+  --link: #8fb0f5; --focus: #8fb0f5;
+  --crit: #f97066; --high: #f38744; --med: #e8b339; --low: #7aa6f5; --info: #98a2b3;
+  --crit-bg: #2a1716; --high-bg: #2a1c12; --med-bg: #2a2312; --low-bg: #142034; --info-bg: #1f242b;
 }
-:root[data-theme="light"] code,
-:root[data-theme="light"] .evidence-box,
-:root[data-theme="light"] pre.poc,
-:root[data-theme="light"] ul.file-list {
-  background: #f6f7f9;
-  color: #2a2f37;
-}
-:root[data-theme="light"] pre.poc { color: #1f4d2e; }
-:root[data-theme="light"] .toolbar input[type=search] {
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'><circle cx='11' cy='11' r='7'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>");
-}
-body, .finding, .dash-panel, .summary-card, details.module-section, .risk-banner {
-  transition: background-color .2s var(--ease), border-color .2s var(--ease), color .2s var(--ease);
-}
-.theme-toggle {
-  display: inline-flex; align-items: center; gap: 7px;
-  background: var(--panel-alt); border: 1px solid var(--border); color: var(--text-secondary);
-  font-size: 11.5px; font-weight: 700; letter-spacing: 0.3px;
-  padding: 8px 14px; border-radius: var(--radius-sm); cursor: pointer; font-family: inherit;
-  transition: border-color .15s var(--ease), color .15s var(--ease);
-}
-.theme-toggle:hover { border-color: var(--accent); color: var(--accent-soft); }
-.theme-toggle .icon { font-size: 13px; line-height: 0; }
 * { box-sizing: border-box; }
-html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
-body {
-  background: var(--bg-radial), var(--bg);
-  background-attachment: fixed;
-  color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', 'Helvetica Neue', Arial, sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
-  margin: 0;
-  padding: 0;
-  -moz-osx-font-smoothing: grayscale;
-}
-::selection { background: var(--accent-dim); color: var(--text); }
-.wrap { max-width: 1200px; margin: 0 auto; padding: 48px 32px 72px; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.55 var(--sans); }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.page { max-width: 1180px; margin: 0 auto; padding: 0 28px 64px; }
 
-/* ---------- Header ---------- */
-header {
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 28px;
-  margin-bottom: 28px;
-}
-header .brand { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
-header .brand .badge-icon {
-  display: inline-flex; line-height: 0; padding: 6px;
-  background: var(--panel-elevated); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); box-shadow: var(--shadow-card);
-}
-header .eyebrow {
-  color: var(--accent-soft); font-size: 11px; font-weight: 700; letter-spacing: 2px;
-  text-transform: uppercase; margin: 0 0 6px 0;
-}
-header h1 {
-  color: var(--text);
-  font-size: 25px;
-  letter-spacing: -0.2px;
-  margin: 0;
-  font-weight: 700;
-}
-header .subtitle { color: var(--muted); font-size: 13px; margin-top: 4px; }
-.meta-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 1px;
-  margin-top: 22px;
-  background: var(--border-soft);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-}
-.meta-item { background: var(--panel-alt); padding: 12px 16px; }
-.meta-item .meta-label {
-  color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.9px; margin-bottom: 5px;
-}
-.meta-item .meta-value {
-  color: var(--text); font-size: 13px; font-weight: 600; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-.meta-item .meta-value.mono { font-family: 'SF Mono', 'Consolas', 'Fira Code', monospace; font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+/* Header */
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 18px 0; border-bottom: 1px solid var(--border); }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .08em; font-size: 13px; }
+.brand-logo { width: 26px; height: 26px; object-fit: contain; }
+.brand small { font-weight: 500; letter-spacing: 0; color: var(--muted); font-size: 12px; margin-left: 6px; }
+.actions { display: flex; gap: 8px; }
+.btn { font: 500 12px var(--sans); color: var(--text-2); background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 4px; padding: 6px 12px; cursor: pointer; }
+.btn:hover { border-color: var(--text-2); color: var(--text); }
+.btn.copied { color: var(--low); border-color: var(--low); }
+.report-title { padding: 28px 0 8px; }
+.report-title .kicker { font-size: 12px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); font-weight: 600; }
+.report-title h1 { margin: 6px 0 0; font-size: 24px; font-weight: 650; letter-spacing: -.01em; word-break: break-word; }
+.meta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 20px 0 0;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.meta div { padding: 10px 14px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); min-width: 0; }
+.meta div:nth-child(4n) { border-right: 0; }
+.meta dt { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+.meta dd { margin: 3px 0 0; font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.meta dd.mono { font-family: var(--mono); font-size: 12.5px; }
+.meta .wide { grid-column: span 4; border-right: 0; }
 
-/* ---------- Risk banner ---------- */
-.risk-banner {
-  position: relative;
-  border-radius: var(--radius-lg);
-  padding: 20px 26px;
-  margin-bottom: 24px;
-  border: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  box-shadow: var(--shadow-card);
-  overflow: hidden;
-}
-.risk-banner::before {
-  content: ""; position: absolute; inset: 0;
-  background: linear-gradient(135deg, rgba(255,255,255,.04), rgba(255,255,255,0) 45%);
-  pointer-events: none;
-}
-.risk-icon-circle {
-  flex-shrink: 0;
-  width: 44px; height: 44px;
-  border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 19px;
-  box-shadow: 0 4px 14px -4px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.12);
-}
-.risk-banner .risk-title { font-size: 16px; font-weight: 700; letter-spacing: 0.1px; }
-.risk-banner .risk-sub { color: var(--text-secondary); font-size: 12.5px; margin-top: 4px; }
+/* Sections */
+section { margin-top: 36px; }
+h2 { font-size: 15px; font-weight: 650; margin: 0 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+h2 .count { font-size: 12px; font-weight: 500; color: var(--muted); }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; }
 
-/* ---------- Section titles ---------- */
-.section-title {
-  color: var(--text);
-  font-size: 12px; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase;
-  margin: 32px 0 14px;
-  display: flex; align-items: center; gap: 9px;
-}
-.section-title::before {
-  content: ""; width: 3px; height: 13px; border-radius: 2px;
-  background: linear-gradient(180deg, var(--accent), var(--accent-soft));
-  display: inline-block;
-}
+/* Executive summary */
+.exec { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 16px; }
+.exec .panel { padding: 16px 18px; }
+.rating { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 650; }
+.rating .sq { width: 12px; height: 12px; border-radius: 2px; background: var(--info); }
+.exec p { margin: 10px 0 0; color: var(--text-2); }
+.exec ul { margin: 10px 0 0; padding-left: 18px; color: var(--text-2); }
+.distbar { display: flex; height: 8px; border-radius: 2px; overflow: hidden; background: var(--info-bg); margin: 4px 0 14px; }
+.distbar span { display: block; height: 100%; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+  font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--border-strong); white-space: nowrap; }
+td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tr.sev-row { cursor: pointer; }
+tr.sev-row:hover td, tr.sev-row.active td { background: var(--surface-2); }
+tr.sev-row.active td:first-child { box-shadow: inset 3px 0 0 var(--focus); }
 
-/* ---------- Dashboard ---------- */
-.dashboard-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 8px; }
-.dash-panel {
-  background: linear-gradient(180deg, var(--panel-elevated), var(--panel));
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 16px 18px;
-  box-shadow: var(--shadow-card);
-  transition: border-color .18s var(--ease), transform .18s var(--ease);
-}
-.dash-panel:hover { border-color: #2c3038; transform: translateY(-1px); }
-.dash-panel h2 {
-  font-size: 11px; margin: 0 0 10px 0; color: var(--accent-soft);
-  text-transform: uppercase; letter-spacing: 1.2px; font-weight: 700;
-  display: flex; align-items: center; gap: 7px;
-}
-.dash-panel h2::before {
-  content: ""; width: 6px; height: 6px; border-radius: 50%;
-  background: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim);
-}
-.dash-panel div { font-size: 12.5px; color: var(--text-secondary); line-height: 1.65; }
+/* Severity label */
+.sev { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 650; white-space: nowrap;
+  padding: 2px 8px; border-radius: 3px; border: 1px solid currentColor; line-height: 1.5; }
+.sev::before { content: ""; width: 7px; height: 7px; border-radius: 1px; background: currentColor; }
+.sev.Critical { color: var(--crit); background: var(--crit-bg); }
+.sev.High { color: var(--high); background: var(--high-bg); }
+.sev.Medium { color: var(--med); background: var(--med-bg); }
+.sev.Low { color: var(--low); background: var(--low-bg); }
+.sev.Info { color: var(--info); background: var(--info-bg); }
+.c-Critical { background: var(--crit); } .c-High { background: var(--high); } .c-Medium { background: var(--med); }
+.c-Low { background: var(--low); } .c-Info { background: var(--info); }
 
-.heatmap { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
-.heat-cell {
-  position: relative;
-  min-height: 54px;
-  border-radius: var(--radius-sm);
-  padding: 9px 10px;
-  color: #000000;
-  font-weight: 800;
-  text-shadow: none;
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,.18), 0 4px 12px -6px rgba(0,0,0,.5);
-  overflow: hidden;
-  transition: transform .15s var(--ease);
-}
-.heat-cell .heat-label { display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: .5px; opacity: .85; font-weight: 800; color: #000000; }
-.heat-cell .heat-count { display: block; font-size: 20px; line-height: 1.25; margin-top: 3px; font-variant-numeric: tabular-nums; color: #000000; font-weight: 800; }
-.heat-cell:hover { transform: translateY(-2px); }
+/* Index table */
+.index-table td.title a { color: var(--text); font-weight: 550; }
+.index-table td.title a:hover { color: var(--link); }
+.index-table .id, .finding .id { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
+.index-wrap { overflow-x: auto; }
 
-/* ---------- Severity summary cards ---------- */
-.summary { display: flex; gap: 14px; margin-bottom: 26px; flex-wrap: wrap; }
-.section-subtitle { color: var(--muted); font-size: 12px; margin: -14px 0 10px; }
-.section-subtitle span { margin-left: 8px; opacity: .8; }
-.summary-card {
-  position: relative;
-  background: linear-gradient(180deg, var(--panel-elevated), var(--panel));
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 0;
-  min-width: 118px;
-  flex: 1;
-  cursor: pointer;
-  overflow: hidden;
-  box-shadow: var(--shadow-card);
-  transition: transform .16s var(--ease), box-shadow .16s var(--ease), border-color .16s var(--ease);
-  user-select: none;
-}
-.summary-card .card-accent { height: 3px; width: 100%; }
-.summary-card .card-body { padding: 16px 20px 18px; }
-.summary-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-card-hover); border-color: #2c3038; }
-.summary-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), var(--shadow-card-hover); }
-.summary-card .count { font-size: 28px; font-weight: 800; line-height: 1; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; }
-.summary-card .label { color: var(--muted); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.1px; margin-top: 8px; }
-.summary-card .detail { color: var(--muted); font-size: 11px; margin-top: 6px; font-variant-numeric: tabular-nums; }
-.summary-severity .summary-card { min-width: 104px; }
-.summary-severity .summary-card .card-body { padding: 12px 15px 14px; }
+/* Toolbar */
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.toolbar input[type=search], .toolbar select { font: 13px var(--sans); color: var(--text); background: var(--surface);
+  border: 1px solid var(--border-strong); border-radius: 4px; padding: 7px 10px; }
+.toolbar input[type=search] { flex: 1 1 280px; min-width: 200px; }
+.chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.chip { font: 500 12px var(--sans); padding: 6px 10px; border: 1px solid var(--border-strong); background: var(--surface);
+  color: var(--text-2); border-radius: 4px; cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--text); color: var(--surface); border-color: var(--text); }
+.toolbar .visible { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
 
-/* ---------- Toolbar ---------- */
-.toolbar {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 20px; gap: 12px; flex-wrap: wrap;
-}
-.toolbar .count-label { color: var(--muted); font-size: 12px; }
-.toolbar input[type=search] {
-  background: var(--panel-alt); border: 1px solid var(--border); color: var(--text);
-  border-radius: var(--radius-sm); padding: 10px 14px 10px 34px; font-size: 13px; min-width: 260px;
-  font-family: inherit;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23868c98' stroke-width='2'><circle cx='11' cy='11' r='7'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>");
-  background-repeat: no-repeat; background-position: 12px center;
-  transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
-}
-.toolbar input[type=search]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+/* Finding */
+.finding { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; }
+.finding > summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  align-items: center; gap: 12px; padding: 11px 14px; }
+.finding > summary::-webkit-details-marker { display: none; }
+.finding > summary::after { content: ""; width: 7px; height: 7px; border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted); transform: rotate(-45deg); margin-right: 4px; }
+.finding[open] > summary::after { transform: rotate(45deg); }
+.finding[open] > summary { border-bottom: 1px solid var(--border); }
+.finding .ftitle { font-weight: 600; overflow-wrap: anywhere; }
+.finding .affected { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.finding.low-confidence .ftitle::after { content: "low confidence"; margin-left: 8px; font-size: 11px; font-weight: 500;
+  color: var(--muted); border: 1px solid var(--border-strong); border-radius: 3px; padding: 0 5px; }
+.fbody { padding: 4px 18px 18px; }
+.attrs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; margin: 12px 0 4px;
+  border: 1px solid var(--border); border-radius: 4px; }
+.attrs div { padding: 8px 12px; border-right: 1px solid var(--border); min-width: 0; }
+.attrs div:nth-child(4) { border-right: 0; }
+.attrs div.wide { grid-column: 1 / -1; border-right: 0; border-top: 1px solid var(--border); }
+.attrs dt { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+.attrs dd { margin: 2px 0 0; font-size: 12.5px; overflow-wrap: anywhere; }
+.attrs dd.mono { font-family: var(--mono); }
+.block { margin-top: 18px; }
+.block > h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 650;
+  margin: 0 0 6px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.block p { margin: 0; color: var(--text-2); max-width: 90ch; white-space: pre-line; }
+.tags { margin-top: 16px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.tags span + span::before { content: " \\00B7  "; }
 
-/* ---------- Module sections ---------- */
-details.module-section {
-  margin-bottom: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--panel-alt);
-  overflow: hidden;
-  box-shadow: var(--shadow-card);
-}
-details.module-section > summary {
-  cursor: pointer;
-  list-style: none;
-  padding: 16px 20px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  user-select: none;
-  background: linear-gradient(180deg, var(--panel-elevated), var(--panel));
-  transition: background .15s var(--ease);
-}
-details.module-section > summary:hover { background: var(--panel-elevated); }
-details.module-section > summary::-webkit-details-marker { display: none; }
-details.module-section > summary::before {
-  content: "";
-  width: 8px; height: 8px;
-  border-right: 2px solid var(--accent-soft); border-bottom: 2px solid var(--accent-soft);
-  transform: rotate(-45deg);
-  transition: transform .2s var(--ease);
-  flex-shrink: 0;
-}
-details.module-section[open] > summary::before { transform: rotate(45deg); }
-.module-title { font-size: 14px; font-weight: 700; letter-spacing: 0.1px; }
-.module-count {
-  color: var(--muted); font-size: 11px; font-weight: 600; margin-left: auto;
-  background: var(--panel-alt); border: 1px solid var(--border); border-radius: 20px; padding: 3px 11px;
-}
-.module-sevdots { display: flex; gap: 6px; }
-.module-sevdots span { width: 9px; height: 9px; border-radius: 50%; display: inline-block; box-shadow: inset 0 0 0 1px rgba(255,255,255,.14); }
-.module-body { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+/* Code / evidence */
+pre, code { font-family: var(--mono); }
+pre.code { margin: 0; background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px;
+  font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 460px; overflow: auto; color: var(--text); }
+pre.code .step { font-weight: 650; color: var(--text); }
+pre.code .cmt { color: var(--muted); }
+pre.code .cmd { color: var(--link); }
+.path { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.path .seg { color: var(--muted); }
+.occ-table { border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.occ-scroll { max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: 4px; }
+.occ-scroll table th { position: sticky; top: 0; background: var(--surface); }
+.occ-table td.ev, .occ-scroll td.ev { font-family: var(--mono); font-size: 12px; color: var(--text-2); overflow-wrap: anywhere; }
+details.sub { margin-top: 18px; border: 1px solid var(--border); border-radius: 4px; }
+details.sub > summary { cursor: pointer; padding: 8px 12px; font-size: 12.5px; font-weight: 600; color: var(--text-2); }
+details.sub > div { padding: 0 12px 12px; }
+details.sub .occ { padding-top: 12px; border-top: 1px solid var(--border); margin-top: 12px; }
+details.sub .occ:first-child { border-top: 0; margin-top: 0; }
+details.sub .occ .path { font-weight: 600; display: block; margin-bottom: 6px; }
+details.sub .occ pre.code + pre.code { margin-top: 6px; }
 
-/* ---------- Finding cards ---------- */
-.finding {
-  position: relative;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 20px 24px;
-  transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
-  box-shadow: var(--shadow-card);
-}
-.finding::before {
-  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
-  background: var(--finding-accent, #444); border-radius: var(--radius-md) 0 0 var(--radius-md);
-}
-.finding:hover { border-color: #2b2f38; }
-.finding-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
-.badge {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-size: 10.5px;
-  font-weight: 700;
-  padding: 5px 12px;
-  border-radius: 20px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  color: #12131a;
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,.22), 0 2px 6px -2px rgba(0,0,0,.4);
-}
-.badge .glyph { font-size: 9px; }
-.finding-title { font-size: 15.5px; font-weight: 650; color: var(--text); letter-spacing: -.1px; }
-.affected-count {
-  color: var(--text-secondary); font-size: 11px; font-weight: 600;
-  background: var(--panel-alt); border: 1px solid var(--border);
-  border-radius: 20px; padding: 3px 10px;
-}
-.finding-meta { color: var(--muted); font-size: 11.5px; margin-bottom: 14px; letter-spacing: .1px; }
-.finding-meta b { color: var(--text-secondary); font-weight: 600; }
-.finding-section { font-size: 13px; margin-top: 12px; }
-.finding-section .label {
-  color: var(--accent-soft); font-size: 10px; text-transform: uppercase; letter-spacing: 1.1px;
-  margin-bottom: 6px; font-weight: 700;
-}
-.finding-section > div:not(.label):not(.evidence-box) { color: var(--text-secondary); line-height: 1.6; }
+.empty { padding: 28px; text-align: center; color: var(--muted); border: 1px dashed var(--border-strong); border-radius: 6px; background: var(--surface); }
+.notes li { margin: 4px 0; color: var(--text-2); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+details.appendix > summary { cursor: pointer; font-size: 15px; font-weight: 650; padding: 0 0 8px; border-bottom: 1px solid var(--border); list-style: none; }
+details.appendix > summary::-webkit-details-marker { display: none; }
+details.appendix > summary::before { content: "+ "; color: var(--muted); }
+details.appendix[open] > summary::before { content: "\\2212  "; }
+details.appendix > summary .count { font-size: 12px; font-weight: 500; color: var(--muted); margin-left: 8px; }
+.appendix-note { color: var(--muted); font-size: 12.5px; margin: 10px 0 12px; }
+footer { margin-top: 48px; padding-top: 14px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px;
+  display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 
-/* ---------- Code / evidence blocks (terminal look) ---------- */
-code, .evidence-box {
-  background: #0c0d10;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 10px 14px;
-  display: block;
-  font-size: 12.5px;
-  font-family: 'SF Mono', 'Consolas', 'Fira Code', monospace;
-  color: #e0c780;
-  overflow-x: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-  line-height: 1.55;
-}
-.poc-section { border-top: 1px solid var(--border-soft); padding-top: 14px; margin-top: 16px; }
-.poc-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.copy-btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  background: var(--panel-alt);
-  border: 1px solid var(--border);
-  color: var(--muted);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-  padding: 5px 12px;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-family: inherit;
-  transition: border-color .15s var(--ease), color .15s var(--ease), background .15s var(--ease);
-}
-.copy-btn:hover { border-color: var(--accent); color: var(--accent-soft); background: var(--accent-dim); }
-.copy-btn.copied { border-color: #5fa876; color: #8fd1a4; background: rgba(95,168,118,.12); }
-pre.poc {
-  position: relative;
-  background: #0c0d10;
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius-sm);
-  padding: 14px 18px;
-  font-size: 12px;
-  line-height: 1.7;
-  color: #c7d6bd;
-  white-space: pre-wrap;
-  word-break: break-word;
-  margin: 10px 0 0 0;
-  font-family: 'SF Mono', 'Consolas', 'Fira Code', monospace;
-}
-details.files-details { margin: 0; }
-details.files-details > summary {
-  cursor: pointer; list-style: none; color: var(--accent-soft); font-size: 12px; font-weight: 600;
-  padding: 5px 0; user-select: none; display: flex; align-items: center; gap: 6px;
-}
-details.files-details > summary::-webkit-details-marker { display: none; }
-details.files-details > summary::before {
-  content: ""; width: 6px; height: 6px;
-  border-right: 2px solid var(--accent-soft); border-bottom: 2px solid var(--accent-soft);
-  transform: rotate(-45deg); transition: transform .2s var(--ease); display: inline-block;
-}
-details.files-details[open] > summary::before { transform: rotate(45deg); }
-ul.file-list {
-  margin: 10px 0 0 0; padding: 12px 16px; list-style: none;
-  background: #0c0d10; border: 1px solid var(--border); border-radius: var(--radius-sm);
-  max-height: 260px; overflow-y: auto; font-family: 'SF Mono', monospace; font-size: 11.5px; color: var(--text-secondary);
-}
-ul.file-list li { padding: 4px 0; border-bottom: 1px solid var(--border-soft); word-break: break-all; }
-ul.file-list li:last-child { border-bottom: none; }
-.tags { display: flex; flex-wrap: wrap; gap: 6px; }
-.tags span {
-  display: inline-block;
-  background: var(--panel-alt);
-  color: var(--text-secondary);
-  font-size: 10px;
-  font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 20px;
-  border: 1px solid var(--border);
-  transition: border-color .15s var(--ease), color .15s var(--ease);
-}
-.tags span:hover { border-color: var(--accent); color: var(--accent-soft); }
-.confidence-low { opacity: 0.76; }
-footer {
-  color: var(--muted); font-size: 11.5px; margin-top: 44px; border-top: 1px solid var(--border);
-  padding-top: 20px; text-align: center; letter-spacing: .1px;
-}
-.empty-state {
-  text-align: center; color: var(--muted); padding: 56px 0; font-size: 13px;
-  border: 1px dashed var(--border); border-radius: var(--radius-lg);
-}
-@media (max-width: 760px) {
-  .dashboard-grid { grid-template-columns: 1fr; }
-  .heatmap { grid-template-columns: repeat(2, 1fr); }
-  .wrap { padding: 28px 18px 48px; }
+@media (max-width: 860px) {
+  .page { padding: 0 16px 48px; }
+  .meta, .attrs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .meta div:nth-child(4n) { border-right: 1px solid var(--border); }
+  .meta div:nth-child(2n) { border-right: 0; }
+  .meta .wide { grid-column: span 2; }
+  .attrs div { border-bottom: 1px solid var(--border); }
+  .exec { grid-template-columns: 1fr; }
+  .finding > summary { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .finding > summary .id, .finding > summary .affected { display: none; }
+  .index-table .hide-sm { display: none; }
 }
 
-/* ---------- Print ---------- */
 @media print {
-  body { background: #ffffff !important; color: #111 !important; }
-  .wrap { max-width: 100%; padding: 0 12px; }
-  .toolbar, .copy-btn { display: none !important; }
-  details { break-inside: avoid; }
-  details.module-section, .finding, .dash-panel, .summary-card, .risk-banner {
-    box-shadow: none !important; border: 1px solid #ccc !important; background: #fff !important;
+  :root, :root[data-theme="dark"] {
+    --bg: #fff; --surface: #fff; --surface-2: #fff; --code-bg: #f6f7f8; --border: #d9dce1; --border-strong: #c3c8cf;
+    --text: #000; --text-2: #222; --muted: #555; --link: #000;
+    --crit: #a1170f; --high: #b02c08; --med: #8a4e06; --low: #1a4fa8; --info: #4b5361;
+    --crit-bg: #fff; --high-bg: #fff; --med-bg: #fff; --low-bg: #fff; --info-bg: #fff;
   }
-  details.module-section > summary { background: #f4f4f4 !important; }
-  code, .evidence-box, pre.poc, ul.file-list { background: #f6f6f6 !important; color: #222 !important; border-color: #ccc !important; }
-  .finding-title, .module-title, header h1 { color: #111 !important; }
-  .finding-meta, .dash-panel div, .toolbar .count-label { color: #444 !important; }
+  @page { size: A4; margin: 16mm 14mm 18mm; }
+  body { font-size: 11pt; }
+  .page { max-width: none; padding: 0; }
+  .actions, .toolbar, .btn { display: none !important; }
+  .finding, .panel, .meta, tr, pre.code { break-inside: avoid; }
+  .finding > summary::after, details.appendix > summary::before { display: none; }
+  pre.code, .occ-scroll { max-height: none; overflow: visible; }
+  section.findings-detail { break-before: page; }
+  a { text-decoration: none; }
 }
 """
 
 _SCRIPT = """
-function filterBySeverity(sev, cardEl) {
-  document.querySelectorAll('.summary-card').forEach(c => c.classList.remove('active'));
-  const state = window.__activeFilter;
-  if (state === sev) { window.__activeFilter = null; }
-  else { window.__activeFilter = sev; cardEl.classList.add('active'); }
-  applyFilters();
-}
-function applyFilters() {
-  const q = (document.getElementById('searchBox').value || '').toLowerCase();
-  const sev = window.__activeFilter;
-  let visible = 0;
-  document.querySelectorAll('.module-section').forEach(sec => { let anyVisible = false;
-    sec.querySelectorAll('.finding').forEach(f => {
-      const matchesSev = !sev || f.dataset.severity === sev;
-      const matchesQuery = !q || f.dataset.search.includes(q);
-      const show = matchesSev && matchesQuery;
-      f.style.display = show ? '' : 'none';
-      if (show) { visible++; anyVisible = true; }
+(function () {
+  var state = { sev: null, module: '', q: '' };
+  function $(s, r) { return (r || document).querySelector(s); }
+  function $$(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
+
+  function applyFilters() {
+    var shown = 0;
+    $$('#findings .finding').forEach(function (f) {
+      var ok = (!state.sev || f.dataset.severity === state.sev)
+        && (!state.module || f.dataset.module === state.module)
+        && (!state.q || f.dataset.search.indexOf(state.q) !== -1);
+      f.hidden = !ok;
+      if (ok) shown++;
     });
-    sec.style.display = anyVisible ? '' : 'none';
-    if (anyVisible && (sev || q)) { sec.setAttribute('open', ''); }
-  });
-  document.getElementById('visibleCount').textContent = visible;
-}
-function copyPoc(btn, encoded) {
-  const text = decodeURIComponent(encoded);
-  const done = () => {
-    const original = btn.textContent;
-    btn.textContent = 'Copied';
-    btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = original; btn.classList.remove('copied'); }, 1600);
+    $$('#index tbody tr[data-ref]').forEach(function (r) {
+      var f = document.getElementById(r.dataset.ref);
+      r.hidden = f ? f.hidden : false;
+    });
+    var v = $('#visibleCount'); if (v) v.textContent = shown;
+    var e = $('#noMatch'); if (e) e.hidden = shown !== 0 || $$('#findings .finding').length === 0;
+    $$('.chip[data-sev]').forEach(function (c) { c.setAttribute('aria-pressed', String((c.dataset.sev || null) === state.sev)); });
+    $$('tr.sev-row').forEach(function (r) { r.classList.toggle('active', r.dataset.sev === state.sev); });
+  }
+  window.filterBySeverity = function (sev) {
+    state.sev = (state.sev === sev || !sev) ? null : sev;
+    applyFilters();
+    var d = $('#findings'); if (d && sev) d.scrollIntoView({ block: 'start' });
   };
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
-  } else {
-    fallbackCopy(text, done);
+  window.setAll = function (open) { $$('#findings .finding').forEach(function (f) { if (!f.hidden) f.open = open; }); };
+  window.openFinding = function (id) { var f = document.getElementById(id); if (f) { f.open = true; } };
+
+  function copyText(btn, text) {
+    var done = function () {
+      var t = btn.textContent; btn.textContent = 'Copied'; btn.classList.add('copied');
+      setTimeout(function () { btn.textContent = t; btn.classList.remove('copied'); }, 1500);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(function () { fallbackCopy(text); done(); });
+    } else { fallbackCopy(text); done(); }
   }
-}
-function fallbackCopy(text, cb) {
-  const ta = document.createElement('textarea');
-  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-  document.body.appendChild(ta); ta.select();
-  try { document.execCommand('copy'); } catch (e) {}
-  document.body.removeChild(ta);
-  cb();
-}
-function applyTheme(mode) {
-  document.documentElement.setAttribute('data-theme', mode);
-  const icon = document.getElementById('themeToggleIcon');
-  const label = document.getElementById('themeToggleLabel');
-  if (icon && label) {
-    if (mode === 'light') { icon.innerHTML = '&#9789;'; label.textContent = 'Dark Mode'; }
-    else { icon.innerHTML = '&#9728;'; label.textContent = 'Light Mode'; }
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
   }
-}
-function toggleTheme() {
-  const current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
-  const next = current === 'light' ? 'dark' : 'light';
-  applyTheme(next);
-  try { localStorage.setItem('warden-report-theme', next); } catch (e) {}
-}
-document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('searchBox').addEventListener('input', applyFilters);
-  let saved = 'dark';
-  try { saved = localStorage.getItem('warden-report-theme') || 'dark'; } catch (e) {}
-  applyTheme(saved);
-});
+  window.copyPoc = function (btn, encoded) { copyText(btn, decodeURIComponent(encoded)); };
+
+  function applyTheme(mode) {
+    document.documentElement.setAttribute('data-theme', mode);
+    var b = $('#themeToggle'); if (b) b.textContent = mode === 'dark' ? 'Light theme' : 'Dark theme';
+  }
+  window.toggleTheme = function () {
+    var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    applyTheme(next); try { localStorage.setItem('warden-report-theme', next); } catch (e) {}
+  };
+
+  var printOpen = [];
+  window.addEventListener('beforeprint', function () {
+    printOpen = $$('details:not([open])'); printOpen.forEach(function (d) { d.open = true; });
+  });
+  window.addEventListener('afterprint', function () { printOpen.forEach(function (d) { d.open = false; }); });
+
+  document.addEventListener('DOMContentLoaded', function () {
+    var saved = null;
+    try { saved = localStorage.getItem('warden-report-theme'); } catch (e) {}
+    if (!saved) saved = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    applyTheme(saved);
+    var box = $('#searchBox');
+    if (box) box.addEventListener('input', function () { state.q = box.value.trim().toLowerCase(); applyFilters(); });
+    var mod = $('#moduleFilter');
+    if (mod) mod.addEventListener('change', function () { state.module = mod.value; applyFilters(); });
+    if (location.hash) window.openFinding(location.hash.slice(1));
+    applyFilters();
+  });
+})();
 """
 
 
@@ -637,274 +376,319 @@ def _format_timestamp(value: str | None) -> str:
     return f"{display} {timezone_name}" if timezone_name else display
 
 
-def _render_summary(counts: dict) -> str:
-    unique = counts.get("unique", {})
-    instances = counts.get("instances", {})
-    info_unique = sum(counts.get("info_unique", {}).values())
-    info_instances = sum(counts.get("info_instances", {}).values())
-    total_unique = sum(unique.values()) + info_unique
-    total_instances = sum(instances.values()) + info_instances
-    totals = (
-        ("Unique issues", total_unique, "All grouped findings, including informational issues."),
-        ("Finding instances", total_instances, "All occurrences, including informational findings."),
-        ("Informational issues", info_unique, "Unique inventory and review indicators."),
-        ("Informational instances", info_instances, "Occurrence count for informational indicators."),
-    )
-    total_cards = "".join(
-        f'<div class="summary-card summary-total"><div class="card-accent" '
-        f'style="background:linear-gradient(90deg, var(--accent), var(--accent-soft));"></div>'
-        f'<div class="card-body"><div class="count">{count}</div>'
-        f'<div class="label">{_esc(label)}</div><div class="detail">{_esc(detail)}</div></div></div>'
-        for label, count, detail in totals
-    )
-    severity_cards = []
-    for sev in SEVERITY_ORDER:
-        if sev == "Info":
-            continue
-        count = unique.get(sev, 0)
-        instance_count = instances.get(sev, 0)
-        color = SEVERITY_COLORS.get(sev, "#8b8f96")
-        gradient = _severity_gradient(sev)
-        severity_cards.append(
-            f'<div class="summary-card" '
-            f'onclick="filterBySeverity(\'{sev}\', this)">'
-            f'<div class="card-accent" style="background:{gradient};"></div>'
-            f'<div class="card-body">'
-            f'<div class="count" style="color:{color}">{count}</div>'
-            f'<div class="label">{_esc(sev)} issues</div>'
-            f'<div class="detail">{instance_count} instance{"s" if instance_count != 1 else ""}</div></div></div>'
-        )
-    return (
-        f'<div class="summary summary-overview">{total_cards}</div>'
-        '<div class="section-subtitle">Unique vulnerability issues by severity'
-        '<span>Instance counts are shown beneath each severity.</span></div>'
-        f'<div class="summary summary-severity">{"".join(severity_cards)}</div>'
-    )
-
-
-def _render_risk_banner(counts: dict) -> str:
-    # Use the 'instances' count for vulnerability severities (exclude Info)
-    vuln_instances = counts.get('instances', {})
-    if vuln_instances.get("Critical"):
-        level, icon, color, bg = "Critical Risk", "\u26A0", "#d9695f", "#2e1f1c"
-        sub = f"{vuln_instances['Critical']} critical finding(s) require immediate remediation before release."
-    elif vuln_instances.get("High"):
-        level, icon, color, bg = "High Risk", "\u26A0", "#dd9457", "#2e2419"
-        sub = f"{vuln_instances['High']} high-severity finding(s) should be remediated before release."
-    elif vuln_instances.get("Medium"):
-        level, icon, color, bg = "Moderate Risk", "\u25CF", "#d8bd66", "#2a2819"
-        sub = f"{vuln_instances['Medium']} medium-severity finding(s) identified \u2014 review recommended."
-    elif vuln_instances.get("Low"):
-        level, icon, color, bg = "Low Risk", "\u25CF", "#8aa6bd", "#1c2429"
-        sub = "Only low-severity findings identified \u2014 no urgent action required."
-    else:
-        level, icon, color, bg = "No Significant Risk", "\u2713", "#93a56e", "#1e2419"
-        sub = "No findings above informational severity were identified in this scan."
-    return f"""<div class="risk-banner" style="background:{bg}; border-color:{color}44;">
-  <div class="risk-icon-circle" style="background:linear-gradient(135deg, {color}, {color}99); color:#12131a;">{icon}</div>
-  <div>
-    <div class="risk-title" style="color:{color};">{_esc(level)}</div>
-    <div class="risk-sub">{_esc(sub)}</div>
-  </div>
-</div>"""
+def _duration(start: str | None, end: str | None) -> str:
+    try:
+        seconds = (datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds()
+    except (TypeError, ValueError):
+        return "—"
+    minutes, secs = divmod(int(round(seconds)), 60)
+    return f"{minutes}m {secs:02d}s" if minutes else f"{seconds:.1f}s"
 
 
 def _mapped_values(f: dict, mapping: dict[str, str]) -> list[str]:
     tags = set(f.get("tags", []))
-    values = [v for tag, v in mapping.items() if tag in tags]
-    return sorted(set(values))
+    return sorted({v for tag, v in mapping.items() if tag in tags})
 
 
-def _render_dashboard(findings: list[dict], counts: dict) -> str:
-    mitre = sorted({v for f in findings for v in _mapped_values(f, MITRE_BY_TAG)})
-    cwes = sorted({v for f in findings for v in _mapped_values(f, CWE_BY_TAG)})
-    attack_tags = sorted({t for f in findings for t in f.get("tags", []) if t in {
-        "credential", "database", "auto-update", "signature", "dependency-graph", "named-pipe", "registry-key", "url"
-    }})
-    # Use instances count for heatmap (vulnerabilities only)
-    vuln_instances = counts.get('instances', {})
-    heat_cells = "".join(
-        f'<div class="heat-cell" style="background:{_severity_gradient(sev)}">'
-        f'<span class="heat-label">{_esc(sev)}</span><span class="heat-count">{_esc(vuln_instances.get(sev, 0))}</span></div>'
-        for sev in SEVERITY_ORDER if sev != "Info"
-    )
-    # Calculate highest active severity from vuln_instances
-    highest_sev = "None"
-    for sev in SEVERITY_ORDER:
-        if sev == "Info":
+def _module_label(module: str) -> str:
+    return MODULE_LABELS.get(module, module.replace("_", " ").title())
+
+
+def _sev(sev: str) -> str:
+    return f'<span class="sev {_esc(sev)}">{_esc(sev)}</span>'
+
+
+def _path_html(path: str) -> str:
+    """Archive chains ("setup.exe > app.7z > app.exe") with muted separators."""
+    parts = [_esc(p) for p in str(path).split(" > ")]
+    return '<span class="path">' + '<span class="seg"> &rsaquo; </span>'.join(parts) + "</span>"
+
+
+_STEP_RE = re.compile(r"^(\s*)(\d+\.)(\s.*)?$")
+_CMD_RE = re.compile(
+    r"^(\s+)((?:\$f|\$b|Get-|Select-String|dumpbin|signtool|osslsigncode|strings64|icacls|mt\.exe|7z |npx |python|xxd|grep|"
+    r"sc |reg |icacls|Import-Module|codesign|otool|readelf|file |objdump|spctl|plutil|stat |find |ls ).*)$"
+)
+
+
+def _code(text: str) -> str:
+    """Escaped code block with light, safe highlighting: numbered steps bold,
+    command lines tinted, parenthesised notes muted."""
+    out = []
+    for line in str(text).split("\n"):
+        m = _STEP_RE.match(line)
+        if m:
+            out.append(f'{_esc(m.group(1))}<span class="step">{_esc(m.group(2))}</span>{_esc(m.group(3) or "")}')
             continue
-        if vuln_instances.get(sev, 0) > 0:
-            highest_sev = sev
-            break
+        m = _CMD_RE.match(line)
+        if m:
+            out.append(f'{_esc(m.group(1))}<span class="cmd">{_esc(m.group(2))}</span>')
+            continue
+        if line.strip().startswith("(") and line.strip().endswith(")"):
+            out.append(f'<span class="cmt">{_esc(line)}</span>')
+            continue
+        out.append(_esc(line))
+    return '<pre class="code">' + "\n".join(out) + "</pre>"
 
-    vuln_unique = sum(counts.get("unique", {}).values())
-    vuln_instances = sum(counts.get("instances", {}).values())
-    info_unique = sum(counts.get("info_unique", {}).values())
-    info_instances = sum(counts.get("info_instances", {}).values())
-    unique_total = vuln_unique + info_unique
-    instance_total = vuln_instances + info_instances
-    return f"""<div class="section-title">Assessment Overview</div>
-<div class="dashboard-grid">
-  <div class="dash-panel"><h2>Executive Summary</h2><div>{unique_total} total unique issue(s), including {vuln_unique} vulnerability issue(s) and {info_unique} informational issue(s), across {instance_total} finding instance(s), including {vuln_instances} vulnerability and {info_instances} informational instance(s). Highest active severity: {_esc(highest_sev)}.</div></div>
-  <div class="dash-panel"><h2>Risk Heatmap</h2><div class="heatmap">{heat_cells}</div></div>
-  <div class="dash-panel"><h2>Attack Surface</h2><div>{_esc(", ".join(attack_tags[:12]) or "No notable attack-surface tags detected.")}</div></div>
-  <div class="dash-panel"><h2>MITRE ATT&CK</h2><div>{_esc(", ".join(mitre[:10]) or "No mapping available for current tags.")}</div></div>
-  <div class="dash-panel"><h2>CWE</h2><div>{_esc(", ".join(cwes[:10]) or "No CWE mapping available for current tags.")}</div></div>
-  <div class="dash-panel"><h2>Remediation Focus</h2><div>Prioritize Critical/High findings, rotate exposed credentials, validate signing trust, review privilege manifests, and harden update/dependency surfaces.</div></div>
+
+def _copy_btn(text: str, label: str = "Copy") -> str:
+    return f"<button class=\"btn\" type=\"button\" onclick=\"copyPoc(this, '{urllib.parse.quote(str(text))}')\">{label}</button>"
+
+
+def _highest(counts: dict) -> str:
+    instances = counts.get("instances", {})
+    return next((s for s in SEVERITY_ORDER if s != "Info" and instances.get(s, 0) > 0), "None")
+
+
+def _render_header(meta, report_data: dict, findings: list[dict]) -> str:
+    target = normalize_target_path(meta.target_path)
+    m = report_data["metadata"]
+    modules = ", ".join(
+        f"{_module_label(name)} ({count})" for name, count in sorted(meta.module_execution_counts.items())
+    ) or "—"
+    instances = sum(len(f.get("occurrences") or []) for f in findings)
+    rows = [
+        ("Target", f'<dd class="mono">{_esc(target)}</dd>', False),
+        ("Scan started", f'<dd><time datetime="{_esc(meta.started_at)}">{_esc(_format_timestamp(meta.started_at))}</time></dd>', False),
+        ("Scan finished", f'<dd><time datetime="{_esc(meta.finished_at)}">{_esc(_format_timestamp(meta.finished_at))}</time></dd>', False),
+        ("Duration", f"<dd>{_esc(_duration(meta.started_at, meta.finished_at))}</dd>", False),
+        ("Files scanned", f"<dd>{_esc(m['files_scanned'])} <span style='color:var(--muted)'>({_esc(m['input_files_scanned'])} input, {_esc(m['extracted_files_scanned'])} extracted)</span></dd>", False),
+        ("Issues", f"<dd>{len(findings)} <span style='color:var(--muted)'>({instances} instances)</span></dd>", False),
+        ("Inventory items", f"<dd>{len(report_data.get('inventory') or [])}</dd>", False),
+        ("Tool version", f'<dd class="mono">Warden {_esc(meta.tool_version)}</dd>', False),
+        ("Module executions", f"<dd>{_esc(modules)}</dd>", True),
+    ]
+    meta_html = "".join(
+        f'<div class="{"wide" if wide else ""}"><dt>{label}</dt>{value}</div>' for label, value, wide in rows
+    )
+    return f"""<div class="topbar">
+  <div class="brand">{_BRAND_LOGO}WARDEN<small>Static Security Assessment</small></div>
+  <div class="actions">
+    <button class="btn" type="button" onclick="window.print()">Print / PDF</button>
+    <button class="btn" type="button" id="themeToggle" onclick="toggleTheme()">Dark theme</button>
+  </div>
+</div>
+<div class="report-title">
+  <div class="kicker">Security Assessment Report</div>
+  <h1>{_esc(target)}</h1>
+  <dl class="meta">{meta_html}</dl>
 </div>"""
 
 
-def _render_finding(f: dict, idx: int) -> str:
-    gradient = _severity_gradient(f["severity"])
-    glyph = SEVERITY_GLYPHS.get(f["severity"], "\u25CF")
-    conf_class = "confidence-low" if f.get("confidence") == "Low" else ""
-    tags_html = "".join(f"<span>{_esc(t)}</span>" for t in f.get("tags", []))
-    mitre_html = ", ".join(_mapped_values(f, MITRE_BY_TAG))
-    cwe_html = ", ".join(_mapped_values(f, CWE_BY_TAG))
-    occurrences = f.get("occurrences", [])
-    locations = f.get("locations", [f["file_path"]])
-    contexts = f.get("contexts", [])
+def _render_executive(findings: list[dict], counts: dict) -> str:
+    unique, instances = counts.get("unique", {}), counts.get("instances", {})
+    info_u = sum(counts.get("info_unique", {}).values())
+    info_i = sum(counts.get("info_instances", {}).values())
+    highest = _highest(counts)
+    total_vuln = sum(unique.values())
+    rating = {"None": "No significant risk"}.get(highest, f"{highest} risk")
+
+    total_inst = sum(instances.values()) + info_i
+    bar = "".join(
+        f'<span class="c-{s}" style="width:{(instances.get(s, 0) if s != "Info" else info_i) / total_inst * 100:.2f}%" '
+        f'title="{s}: {instances.get(s, 0) if s != "Info" else info_i}"></span>'
+        for s in SEVERITY_ORDER if (instances.get(s, 0) if s != "Info" else info_i)
+    ) if total_inst else ""
+    rows = "".join(
+        f'<tr class="sev-row" data-sev="{s}" onclick="filterBySeverity(\'{s}\')" tabindex="0" '
+        f'onkeydown="if(event.key===\'Enter\')filterBySeverity(\'{s}\')">'
+        f"<td>{_sev(s)}</td>"
+        f'<td class="num">{unique.get(s, 0) if s != "Info" else info_u}</td>'
+        f'<td class="num">{instances.get(s, 0) if s != "Info" else info_i}</td></tr>'
+        for s in SEVERITY_ORDER
+    )
+
+    by_module: dict[str, int] = {}
+    for f in findings:
+        if f["severity"] != "Info":
+            by_module[f["module"]] = by_module.get(f["module"], 0) + 1
+    top = [f for f in findings if f["severity"] in ("Critical", "High")][:5] or \
+          [f for f in findings if f["severity"] == "Medium"][:5]
+    top_html = "".join(
+        f'<li><a href="#{_esc(f["_ref"])}" onclick="openFinding(\'{_esc(f["_ref"])}\')">{_esc(f["title"])}</a> '
+        f'<span style="color:var(--muted)">({_esc(f["severity"])}, {len(f.get("occurrences") or []) or 1} affected)</span></li>'
+        for f in top
+    )
+    areas = ", ".join(f"{_module_label(m)} ({n})" for m, n in sorted(by_module.items(), key=lambda kv: -kv[1]))
+    summary = (
+        f"{total_vuln} distinct security issue{'s' if total_vuln != 1 else ''} "
+        f"({sum(instances.values())} affected instance{'s' if sum(instances.values()) != 1 else ''}) "
+        f"and {info_u} informational observation{'s' if info_u != 1 else ''} were identified."
+    )
+    sev_var = {"Critical": "--crit", "High": "--high", "Medium": "--med", "Low": "--low"}.get(highest, "--info")
+    sq = f'<span class="sq" style="background:var({sev_var})"></span>'
+    return f"""<section id="summary">
+  <h2>Executive summary</h2>
+  <div class="exec">
+    <div class="panel">
+      <div class="rating">{sq}{_esc(rating)}</div>
+      <p>{_esc(RISK_TEXT.get(highest, RISK_TEXT['None']))}</p>
+      <p>{_esc(summary)}{(' Affected areas: ' + _esc(areas) + '.') if areas else ''}</p>
+      {('<p style="margin-top:14px;font-weight:600;color:var(--text)">Priority issues</p><ul>' + top_html + '</ul>') if top_html else ''}
+    </div>
+    <div class="panel">
+      <div style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.06em">Risk distribution (instances)</div>
+      <div class="distbar">{bar}</div>
+      <table>
+        <thead><tr><th>Severity</th><th class="num">Issues</th><th class="num">Instances</th></tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px">Select a severity to filter the findings below.</div>
+    </div>
+  </div>
+</section>"""
+
+
+def _render_index(findings: list[dict]) -> str:
+    if not findings:
+        return """<section id="index"><h2>Findings index</h2><div class="empty">No findings were identified by the modules run in this scan.</div></section>"""
+    rows = "".join(
+        f'<tr data-ref="{_esc(f["_ref"])}"><td class="id">{_esc(f["_id"])}</td><td>{_sev(f["severity"])}</td>'
+        f'<td class="title"><a href="#{_esc(f["_ref"])}" onclick="openFinding(\'{_esc(f["_ref"])}\')">{_esc(f["title"])}</a></td>'
+        f'<td class="hide-sm">{_esc(_module_label(f["module"]))}</td>'
+        f'<td class="num">{len(f.get("occurrences") or []) or 1}</td></tr>'
+        for f in findings
+    )
+    return f"""<section id="index">
+  <h2>Findings index <span class="count">{len(findings)} issue{'s' if len(findings) != 1 else ''}</span></h2>
+  <div class="panel index-wrap"><table class="index-table">
+    <thead><tr><th>ID</th><th>Severity</th><th>Finding</th><th class="hide-sm">Area</th><th class="num">Affected</th></tr></thead>
+    <tbody>{rows}</tbody>
+  </table></div>
+</section>"""
+
+
+def _render_finding(f: dict) -> str:
+    occurrences = f.get("occurrences") or []
+    locations = f.get("locations") or [f.get("file_path", "")]
+    contexts = f.get("contexts") or []
     affected = len(occurrences) or len(locations)
-    affected_badge = f'<span class="affected-count">{affected} affected occurrence{"s" if affected != 1 else ""}</span>'
+    cwe = ", ".join(_mapped_values(f, CWE_BY_TAG))
+    mitre = ", ".join(_mapped_values(f, MITRE_BY_TAG))
 
-    if len(locations) > 3:
-        preview = "".join(f"<li>{_esc(loc)}</li>" for loc in locations)
-        files_html = f"""<details class="files-details">
-      <summary>Show {len(locations)} affected occurrences</summary>
-      <ul class="file-list">{preview}</ul>
-    </details>"""
+    attrs = [("Rule", f'<dd class="mono">{_esc(f["rule_id"])}</dd>'),
+             ("Area", f"<dd>{_esc(_module_label(f['module']))}</dd>"),
+             ("Confidence", f"<dd>{_esc(f.get('confidence', ''))}</dd>"),
+             ("Affected", f"<dd>{affected} location{'s' if affected != 1 else ''}</dd>")]
+    if cwe or mitre:
+        attrs.append(("Classification", f"<dd>{_esc('; '.join(x for x in (cwe, mitre) if x))}</dd>"))
+    attrs_html = "".join(
+        f'<div{" class=wide" if k == "Classification" else ""}><dt>{k}</dt>{v}</div>' for k, v in attrs
+    )
+
+    # Affected locations with each occurrence's own evidence.
+    if occurrences:
+        occ_rows = "".join(
+            f"<tr><td class='num'>{i}</td><td>{_path_html(o.get('location') or o.get('file_path', ''))}</td>"
+            f"<td class='ev'>{_esc(o.get('evidence', ''))}</td></tr>"
+            for i, o in enumerate(occurrences, 1)
+        )
+        head = "<thead><tr><th class='num'>#</th><th>Location</th><th>Evidence</th></tr></thead>"
     else:
-        files_html = "".join(f"<div class='evidence-box' style='margin-bottom:4px;'>{_esc(loc)}</div>" for loc in locations)
+        occ_rows = "".join(f"<tr><td class='num'>{i}</td><td>{_path_html(loc)}</td></tr>" for i, loc in enumerate(locations, 1))
+        head = "<thead><tr><th class='num'>#</th><th>Location</th></tr></thead>"
+    occ_cls = "occ-scroll" if affected > 8 else "occ-table"
+    occ_html = f'<div class="{occ_cls}"><table>{head}<tbody>{occ_rows}</tbody></table></div>'
 
-    # Multi-line code-context snippets (matched line + surrounding lines,
-    # numbered) for each affected location that has one — this is what lets
-    # an analyst pinpoint the exact spot in the file instead of just seeing
-    # the bare matched string in isolation.
     context_entries = [
-        (occurrence.get("location", locations[index] if index < len(locations) else ""), occurrence.get("context", ""))
-        for index, occurrence in enumerate(occurrences)
-        if occurrence.get("context")
+        (o.get("location", ""), o.get("context")) for o in occurrences if o.get("context")
     ] if occurrences else [(loc, ctx) for loc, ctx in zip(locations, contexts) if ctx]
     context_html = ""
     if context_entries:
-        shown = context_entries[:3]
-        blocks = "".join(
-            f"<div style='margin-bottom:8px;'>"
-            f"<div style='color:var(--muted); font-size:10.5px; margin-bottom:3px;'>{_esc(loc)}</div>"
-            f"<pre class='evidence-box' style='margin:0;'>{_esc(ctx)}</pre>"
-            f"</div>"
-            for loc, ctx in shown
-        )
-        more_note = (
-            f"<div style='color:var(--muted); font-size:11px;'>+ {len(context_entries) - 3} more location(s) with context not shown here — see Affected Files above.</div>"
-            if len(context_entries) > 3 else ""
-        )
-        context_html = f"""<div class="finding-section">
-    <div class="label">Code Context</div>
-    {blocks}{more_note}
-  </div>"""
-
-    searchable_evidence = [str(f.get("evidence", ""))]
-    searchable_poc = [str(f.get("poc", ""))]
-    searchable_context = [str(context) for context in contexts]
-    for occurrence in occurrences:
-        searchable_evidence.append(str(occurrence.get("evidence", "")))
-        searchable_context.append(str(occurrence.get("context", "")))
-    search_blob = _esc(" ".join(
-        [f["title"], f["rule_id"], f["module"]]
-        + locations[:50]
-        + searchable_evidence
-        + searchable_poc
-        + searchable_context
-    )).lower()
+        loc, ctx = context_entries[0]
+        more = (f'<p style="margin-top:6px;color:var(--muted);font-size:12px">Context for {len(context_entries) - 1} more '
+                f'location(s) is under "Per-location detail" below.</p>') if len(context_entries) > 1 else ""
+        context_html = (f'<div class="block"><h3>Code context <span style="text-transform:none;letter-spacing:0;font-weight:500">'
+                        f'{_path_html(loc)}</span></h3>{_code(ctx)}{more}</div>')
 
     poc_html = ""
     if f.get("poc"):
-        import urllib.parse
-        encoded_poc = urllib.parse.quote(str(f["poc"]))
-        note = ' (example \u2014 first affected file shown; repeat against each file listed above)' if len(locations) > 1 else ''
-        poc_html = f"""<div class="finding-section poc-section">
-    <div class="poc-head">
-      <div class="label" style="margin-bottom:0;">Proof of Concept / Reproduction Steps{note}</div>
-      <button class="copy-btn" onclick="copyPoc(this, '{encoded_poc}')">Copy</button>
-    </div>
-    <pre class="poc">{_esc(f['poc'])}</pre>
-  </div>"""
+        note = " (first location; repeat for each location listed)" if affected > 1 else ""
+        poc_html = (f'<div class="block"><h3>Proof of concept / reproduction{_esc(note)} {_copy_btn(f["poc"])}</h3>'
+                    f'{_code(f["poc"])}</div>')
 
-    occurrences_html = ""
-    if occurrences:
-        occurrence_entries = []
-        for occurrence in occurrences:
-            detail = [
-                f"<strong>{_esc(occurrence.get('location', occurrence.get('file_path', '')))}</strong>",
-                f"Confidence: {_esc(occurrence.get('confidence', 'Medium'))}",
-                f"Evidence: {_esc(occurrence.get('evidence', ''))}",
-            ]
-            context = occurrence.get("context")
-            if context:
-                detail.append(f"<pre class='evidence-box'>{_esc(context)}</pre>")
-            occurrence_poc = occurrence.get("poc")
-            if occurrence_poc:
-                detail.append(f"<pre class='poc'>{_esc(occurrence_poc)}</pre>")
-            occurrence_entries.append("<li>" + "<br>".join(detail) + "</li>")
-        occurrences_html = (
-            '<div class="finding-section"><div class="label">Occurrences</div>'
-            f"<ol>{''.join(occurrence_entries)}</ol></div>"
-        )
+    detail_html = ""
+    if len(occurrences) > 1:
+        items = []
+        for o in occurrences:
+            parts = [_path_html(o.get("location") or o.get("file_path", "")).replace('class="path"', 'class="path" style="font-weight:600;display:block;margin-bottom:6px"', 1)]
+            parts.append(_code(o.get("evidence", "")))
+            if o.get("context"):
+                parts.append(_code(o["context"]))
+            if o.get("poc"):
+                parts.append(f'<div style="display:flex;justify-content:flex-end;margin:8px 0 4px">{_copy_btn(o["poc"], "Copy PoC")}</div>' + _code(o["poc"]))
+            items.append('<div class="occ">' + "".join(parts) + "</div>")
+        detail_html = (f'<details class="sub"><summary>Per-location detail ({len(occurrences)})</summary>'
+                       f'<div>{"".join(items)}</div></details>')
 
-    return f"""
-<div class="finding {conf_class}" id="finding-{idx}" style="--finding-accent:{gradient};" data-severity="{_esc(f['severity'])}" data-search="{search_blob}">
-  <div class="finding-header">
-    <span class="badge" style="background:{gradient};"><span class="glyph">{glyph}</span>{_esc(f['severity'])}</span>
-    <span class="finding-title">{_esc(f['title'])}</span>
-    {affected_badge}
-  </div>
-  <div class="finding-meta">
-    rule: {_esc(f['rule_id'])} &middot; confidence: {_esc(f['confidence'])}{' &middot; MITRE: ' + _esc(mitre_html) if mitre_html else ''}{' &middot; CWE: ' + _esc(cwe_html) if cwe_html else ''}
-  </div>
-  <div class="finding-section">
-    <div class="label">Affected Occurrences</div>
-    {files_html}
-  </div>
-  <div class="finding-section">
-    <div class="label">Evidence</div>
-    <div class="evidence-box">{_esc(f['evidence'])}</div>
-  </div>
-  {occurrences_html}
-  {context_html}
-  <div class="finding-section">
-    <div class="label">Description</div>
-    <div>{_esc(f['description'])}</div>
-  </div>
-  <div class="finding-section">
-    <div class="label">Remediation</div>
-    <div>{_esc(f['remediation'])}</div>
-  </div>
-  {poc_html}
-  <div class="finding-section tags">{tags_html}</div>
-</div>
-"""
+    searchable = [f["title"], f["rule_id"], f["module"], _module_label(f["module"]), str(f.get("evidence", "")),
+                  str(f.get("description", "")), str(f.get("poc", ""))] + [str(x) for x in locations[:200]]
+    for o in occurrences:
+        searchable += [str(o.get("evidence", "")), str(o.get("context", ""))]
+    search_blob = _esc(" ".join(searchable).lower())
+    tags_html = "".join(f"<span>{_esc(t)}</span>" for t in f.get("tags", []))
+    low_conf = " low-confidence" if f.get("confidence") == "Low" else ""
+    evidence = str(f.get("evidence", ""))
 
-
-def _render_module_section(module: str, findings: list[dict], start_idx: int, open_by_default: bool) -> str:
-    label = MODULE_LABELS.get(module, module.replace("_", " ").title())
-    sev_counts = {}
-    for f in findings:
-        sev_counts[f["severity"]] = sev_counts.get(f["severity"], 0) + 1
-    dots = "".join(
-        f'<span style="background:{_severity_gradient(s)};" title="{_esc(s)}: {c}"></span>'
-        for s, c in sorted(sev_counts.items(), key=lambda kv: SEVERITY_ORDER.index(kv[0]) if kv[0] in SEVERITY_ORDER else 99)
-    )
-    findings_html = "".join(_render_finding(f, start_idx + i) for i, f in enumerate(findings))
-    open_attr = " open" if open_by_default else ""
-    return f"""<details class="module-section"{open_attr}>
-  <summary>
-    <span class="module-title">{_esc(label)}</span>
-    <div class="module-sevdots">{dots}</div>
-    <span class="module-count">{len(findings)} grouped finding{"s" if len(findings) != 1 else ""}</span>
-  </summary>
-  <div class="module-body">{findings_html}</div>
+    return f"""<details class="finding{low_conf}" id="{_esc(f['_ref'])}" data-severity="{_esc(f['severity'])}" data-module="{_esc(f['module'])}" data-search="{search_blob}">
+  <summary><span class="id">{_esc(f['_id'])}</span>{_sev(f['severity'])}<span class="ftitle">{_esc(f['title'])}</span><span class="affected">{affected} affected</span></summary>
+  <div class="fbody">
+    <dl class="attrs">{attrs_html}</dl>
+    <div class="block"><h3>Description</h3><p>{_esc(f.get('description') or '—')}</p></div>
+    <div class="block"><h3>Evidence {_copy_btn(evidence)}</h3>{_code(evidence)}</div>
+    <div class="block"><h3>Affected locations</h3>{occ_html}</div>
+    {context_html}
+    <div class="block"><h3>Remediation</h3><p>{_esc(f.get('remediation') or '—')}</p></div>
+    {poc_html}
+    {detail_html}
+    <div class="tags">{tags_html}</div>
+  </div>
 </details>"""
+
+
+def _render_findings(findings: list[dict]) -> str:
+    modules = sorted({f["module"] for f in findings}, key=_module_label)
+    options = "".join(f'<option value="{_esc(m)}">{_esc(_module_label(m))}</option>' for m in modules)
+    chips = '<button class="chip" type="button" data-sev="" onclick="filterBySeverity(null)">All</button>' + "".join(
+        f'<button class="chip" type="button" data-sev="{s}" onclick="filterBySeverity(\'{s}\')">{s}</button>'
+        for s in SEVERITY_ORDER if any(f["severity"] == s for f in findings)
+    )
+    body = "".join(_render_finding(f) for f in findings) or \
+        '<div class="empty">No findings were identified by the modules run in this scan.</div>'
+    return f"""<section class="findings-detail">
+  <h2>Detailed findings <span class="count">{len(findings)} issue{'s' if len(findings) != 1 else ''}</span></h2>
+  <div class="toolbar">
+    <input type="search" id="searchBox" placeholder="Search title, rule, file path, evidence…" aria-label="Search findings">
+    <select id="moduleFilter" aria-label="Filter by area"><option value="">All areas</option>{options}</select>
+    <div class="chips">{chips}</div>
+    <button class="btn" type="button" onclick="setAll(true)">Expand all</button>
+    <button class="btn" type="button" onclick="setAll(false)">Collapse all</button>
+    <span class="visible">Showing <span id="visibleCount">{len(findings)}</span> of {len(findings)}</span>
+  </div>
+  <div id="findings">{body}<div class="empty" id="noMatch" hidden>No findings match the current filters.</div></div>
+</section>"""
+
+
+def _render_inventory(inventory: list[dict]) -> str:
+    if not inventory:
+        return ""
+    body = "".join(_render_finding(f) for f in inventory)
+    return f"""<section id="inventory">
+  <details class="appendix"><summary>Appendix: reverse-engineering inventory<span class="count">{len(inventory)} item{'s' if len(inventory) != 1 else ''}</span></summary>
+    <p class="appendix-note">Context collected for manual review (endpoints, dependencies, frameworks, verified hardening controls).
+    These are not vulnerabilities and are excluded from all counts above.</p>
+    {body}
+  </details>
+</section>"""
+
+
+def _render_notes(errors: list[str]) -> str:
+    if not errors:
+        return ""
+    items = "".join(f"<li>{_esc(e)}</li>" for e in errors)
+    return f"""<section id="notes"><h2>Scan notes <span class="count">{len(errors)}</span></h2>
+  <div class="panel" style="padding:8px 18px"><ul class="notes">{items}</ul></div>
+  <p style="color:var(--muted);font-size:12px">Non-fatal issues during the scan (skipped files, extraction limits). Review them when assessing coverage.</p></section>"""
 
 
 def generate_html_report(
@@ -914,107 +698,48 @@ def generate_html_report(
     """Render a self-contained report with complete local scan evidence."""
     report_data = result.to_dict()
     findings = report_data["findings"]
-    meta = result.metadata
+    inventory = report_data.get("inventory") or []
     counts = report_data["summary"]
-    module_run_summary = ", ".join(
-        (
-            f"{name}: {count} "
-            f"(input {meta.module_input_execution_counts.get(name, 0)}, "
-            f"extracted {meta.module_extracted_execution_counts.get(name, 0)})"
-            if meta.module_input_execution_counts or meta.module_extracted_execution_counts
-            else f"{name}: {count}"
-        )
-        for name, count in sorted(meta.module_execution_counts.items())
-    ) or "None"
-    finding_instances = sum(
-        len(finding["occurrences"]) for finding in findings
+    meta = result.metadata
+
+    # Severity first, then most affected; stable IDs W-001.. for cross-references.
+    findings = sorted(
+        findings,
+        key=lambda f: (SEVERITY_ORDER.index(f["severity"]) if f["severity"] in SEVERITY_ORDER else 99,
+                       -(len(f.get("occurrences") or []))),
     )
+    for i, f in enumerate(findings, 1):
+        f["_id"], f["_ref"] = f"W-{i:03d}", f"finding-{i}"
+    for i, f in enumerate(inventory, 1):
+        f["_id"], f["_ref"] = f"INV-{i:03d}", f"inventory-{i}"
 
-    by_module: dict[str, list[dict]] = {}
-    module_order: list[str] = []
-    for f in findings:
-        mod = f["module"]
-        if mod not in by_module:
-            by_module[mod] = []
-            module_order.append(mod)
-        by_module[mod].append(f)
-
-    # Order modules by worst severity present, then by name, so the riskiest
-    # module sections surface first.
-    def _module_rank(mod: str) -> int:
-        sevs = [f["severity"] for f in by_module[mod]]
-        for i, sev in enumerate(SEVERITY_ORDER):
-            if sev in sevs:
-                return i
-        return len(SEVERITY_ORDER)
-
-    module_order.sort(key=_module_rank)
-
-    sections_html = []
-    idx = 0
-    for mod in module_order:
-        mod_findings = by_module[mod]
-        open_default = True
-        sections_html.append(_render_module_section(mod, mod_findings, idx, open_default))
-        idx += len(mod_findings)
-
-    body_html = "".join(sections_html)
-    if not body_html:
-        body_html = '<div class="empty-state">No findings detected by the modules run in this scan.</div>'
-
-    output_path = Path(output_path)
-    started_display = _format_timestamp(meta.started_at)
-    finished_display = _format_timestamp(meta.finished_at)
-    target_display = normalize_target_path(meta.target_path)
+    target = normalize_target_path(meta.target_path)
     doc = f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="UTF-8">
-<title>Warden Scan Report</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Warden Security Assessment &mdash; {_esc(target)}</title>
 <style>{_STYLE}</style>
 </head>
 <body>
-<div class="wrap">
-<header>
-  <div class="brand" style="justify-content:space-between;">
-    <div style="display:flex;align-items:center;gap:14px;">{_BRAND_SVG}<div><div class="eyebrow">Static Security Assessment Report</div><h1>Warden</h1></div></div>
-    <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" type="button"><span class="icon" id="themeToggleIcon">&#9728;</span><span id="themeToggleLabel">Light Mode</span></button>
-  </div>
-  <div class="subtitle">Static security analysis for thick-client applications</div>
-  <div class="meta-grid">
-    <div class="meta-item"><div class="meta-label">Target</div><div class="meta-value mono" title="{_esc(target_display)}">{_esc(target_display)}</div></div>
-    <div class="meta-item timestamp"><div class="meta-label">Scan Started</div><div class="meta-value" title="{_esc(meta.started_at)}"><time datetime="{_esc(meta.started_at)}">{_esc(started_display)}</time></div></div>
-    <div class="meta-item timestamp"><div class="meta-label">Scan Finished</div><div class="meta-value" title="{_esc(meta.finished_at)}"><time datetime="{_esc(meta.finished_at)}">{_esc(finished_display)}</time></div></div>
-    <div class="meta-item"><div class="meta-label">Files Scanned (Unique)</div><div class="meta-value">{_esc(meta.files_scanned)}</div></div>
-    <div class="meta-item"><div class="meta-label">Input Files</div><div class="meta-value">{_esc(meta.input_files_scanned)}</div></div>
-    <div class="meta-item"><div class="meta-label">Extracted Files</div><div class="meta-value">{_esc(meta.extracted_files_scanned)}</div></div>
-    <div class="meta-item"><div class="meta-label">Module Executions (Input / Extracted)</div><div class="meta-value">{_esc(module_run_summary)}</div></div>
-    <div class="meta-item"><div class="meta-label">Grouped Issues</div><div class="meta-value">{len(findings)}</div></div>
-    <div class="meta-item"><div class="meta-label">Finding Instances</div><div class="meta-value">{finding_instances}</div></div>
-    <div class="meta-item"><div class="meta-label">Tool Version</div><div class="meta-value">{_esc(meta.tool_version)}</div></div>
-  </div>
-</header>
-{_render_risk_banner(counts)}
-{_render_dashboard(findings, counts)}
-<div class="section-title">Severity Summary</div>
-{_render_summary(counts)}
-<div class="toolbar">
-  <input type="search" id="searchBox" placeholder="Filter by title, rule, or file path\u2026">
-  <div class="count-label">Showing <span id="visibleCount">{len(findings)}</span> of {len(findings)} grouped findings &middot; click a severity card to filter</div>
-</div>
-<div class="section-title">Findings Detail</div>
-<div class="findings">
-{body_html}
-</div>
+<div class="page">
+{_render_header(meta, report_data, findings)}
+{_render_executive(findings, counts)}
+{_render_index(findings)}
+{_render_findings(findings)}
+{_render_notes(report_data.get("module_errors") or [])}
+{_render_inventory(inventory)}
 <footer>
-  Generated by Warden &mdash; static-analysis-only tool for authorized VAPT engagements
-  on owned/client-consented applications. No dynamic exploitation or bypass tooling included.
+  <span>Generated by Warden {_esc(meta.tool_version)} &middot; {_esc(_format_timestamp(meta.finished_at))}</span>
+  <span>Static analysis only, for authorized assessments of owned or client-consented applications.</span>
 </footer>
 </div>
 <script>{_SCRIPT}</script>
 </body>
 </html>
 """
+    output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(doc, encoding="utf-8")
     return output_path

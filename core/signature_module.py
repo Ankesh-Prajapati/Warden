@@ -58,7 +58,6 @@ TRUST_VERIFY_APIS = {
 }
 
 # Loose signal words for "this binary probably has an update mechanism".
-UPDATE_KEYWORDS = ("update", "autoupdate", "updater", "upgrade", "/version", "manifest.json")
 
 
 # DER-encoded OIDs of the two Authenticode timestamp forms carried in the
@@ -337,7 +336,7 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
             Finding(
                 module="signature",
                 rule_id="unsigned-binary",
-                title="Unsigned executable/library",
+                title="Binary is not code-signed (no Authenticode signature)",
                 # Medium: a hardening/trust gap, not an exploitable flaw by itself.
                 severity=Severity.MEDIUM,
                 file_path=path,
@@ -462,7 +461,7 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
         findings.append(Finding(
             module="signature",
             rule_id="missing-signature-timestamp",
-            title="Authenticode timestamp not detected",
+            title="Code signature not timestamped: becomes invalid when the certificate expires",
             severity=Severity.MEDIUM,
             file_path=path,
             evidence="No countersignature / RFC 3161 timestamp token in the signature",
@@ -757,90 +756,86 @@ def _publisher_consistency_findings(all_sig_info: list[BinarySignatureInfo]) -> 
     return findings
 
 
+_URL_BYTES_RE = re.compile(rb"https?://[A-Za-z0-9.\-]{3,253}(?::\d{1,5})?(?:/[\x21-\x7e]{0,300})?")
+_UPDATE_URL_RE = re.compile(r"update|upgrade|/releases?\b|/download|/latest|appcast|/version", re.IGNORECASE)
+# Spec / documentation hosts that merely mention "update"/"release" pages.
+_DOC_HOSTS = ("w3.org", "microsoft.com/fwlink", "go.microsoft.com", "schemas.", "github.com/electron",
+              "chromium.org", "googlesource.com", "mozilla.org", "ietf.org", "llvm.org", "nsis.sf.net")
+
+
+def _update_urls(data: bytes) -> list[str]:
+    urls = []
+    for m in _URL_BYTES_RE.finditer(data):
+        url = m.group(0).decode("ascii", "ignore").rstrip("\"'`),;.")
+        if _UPDATE_URL_RE.search(url) and not any(h in url.lower() for h in _DOC_HOSTS) and url not in urls:
+            urls.append(url)
+    return urls[:20]
+
+
 def _auto_update_finding(pe_path: Path) -> Finding | None:
     """
-    Report update-related strings as an informational indicator only.
-    Strings and import-table contents cannot establish whether an updater
-    exists or whether downloaded content is verified.
+    An updater is evidenced by an update endpoint URL, not by the word
+    "update" (every GUI binary imports UpdateWindow). A plain-http endpoint is
+    an exploitable channel (MITM can serve a payload); an https one is context
+    for the tester and goes to the inventory appendix.
     """
     try:
-        raw = pe_path.read_bytes()
+        data = pe_path.read_bytes()
     except OSError:
         return None
-    data = raw.lower()
-    if not any(kw.encode() in data or kw.encode("utf-16-le") in data for kw in UPDATE_KEYWORDS):
+    urls = _update_urls(data)
+    if not urls:
         return None
-
     pe_info = parse_pe(pe_path)
     if not pe_info.is_valid_pe:
         return None
-
-    all_funcs = {
-        fn.lower()
-        for funcs in pe_info.imported_functions.values()
-        for fn in funcs
-    }
-
-    # Win32 API names (UpdateWindow, UpdateResourceW) contain "update" in
-    # nearly every GUI binary; only strings that are not imports count.
-    def real_hit(kw: str) -> bool:
-        if kw.encode("utf-16-le") in data:
-            return True
-        needle, pos = kw.encode(), data.find(kw.encode())
-        while pos != -1:  # linear scan: no regex backtracking on 200 MB binaries
-            start, end = pos, pos + len(needle)
-            while start > 0 and pos - start < 128 and 0x21 <= data[start - 1] <= 0x7E:
-                start -= 1
-            while end < len(data) and end - pos < 128 and 0x21 <= data[end] <= 0x7E:
-                end += 1
-            if data[start:end].decode("ascii", "ignore") not in all_funcs:
-                return True
-            pos = data.find(needle, end)
-        return False
-
-    matched_kw = next((kw for kw in UPDATE_KEYWORDS if real_hit(kw)), None)
-    if matched_kw is None:
-        return None
-    has_trust_api = bool(all_funcs & TRUST_VERIFY_APIS)
-
-    trust_import_note = (
-        "recognized trust API import present"
-        if has_trust_api
-        else "no recognized trust API import found"
+    all_funcs = {fn.lower() for funcs in pe_info.imported_functions.values() for fn in funcs}
+    trust_note = (
+        "imports a signature-verification API (" + ", ".join(sorted(all_funcs & TRUST_VERIFY_APIS)) + ")"
+        if all_funcs & TRUST_VERIFY_APIS else "imports no signature-verification API"
     )
+    insecure = [u for u in urls if u.lower().startswith("http://")]
+    listed = "\n".join(f"     {u}" for u in (insecure or urls))
+    poc = (
+        "1. Show the endpoint(s) in the binary:\n"
+        f"     strings64.exe -n 8 \"{pe_path}\" | findstr /i \"{(insecure or urls)[0]}\"\n"
+        f"2. Endpoints found:\n{listed}\n"
+        f"3. The binary {trust_note}. Review the updater code path to confirm how the downloaded "
+        "package is verified before it is executed."
+    )
+    if insecure:
+        return Finding(
+            module="signature",
+            rule_id="insecure-update-channel-http",
+            title=f"Update endpoint uses plain HTTP: {insecure[0]}",
+            severity=Severity.MEDIUM,
+            file_path=str(pe_path),
+            evidence=", ".join(insecure),
+            description=(
+                "The binary references an update/download endpoint over unencrypted HTTP. "
+                "An attacker on the network path (public Wi-Fi, compromised router, DNS "
+                "spoofing) can replace the update metadata or package; unless the client "
+                f"verifies a signature on the payload, this yields code execution. The binary {trust_note}."
+            ),
+            remediation="Serve update metadata and packages over HTTPS only, and verify a code signature or pinned hash on every downloaded package before executing it.",
+            tags=["signature", "auto-update", "transport"],
+            confidence="Medium",
+            extra={"update_urls": urls},
+            poc=poc,
+        )
     return Finding(
         module="signature",
-        rule_id="insecure-auto-update-indicator",
-        title="Update-related strings detected",
+        rule_id="auto-update-endpoint",
+        title=f"Auto-update endpoint: {urls[0]}",
         severity=Severity.INFO,
         file_path=str(pe_path),
-        evidence=(
-            f"Update-related string matched ('{matched_kw}'); {trust_import_note}"
-        ),
-        description=(
-            "This binary contains an update-related string. Such strings "
-            "and the presence or absence of particular imports do not show "
-            "whether this binary implements an updater or whether downloaded "
-            "content is authenticated. Treat this as an informational review "
-            "indicator only; the verification behavior has not been established."
-        ),
-        remediation=(
-            "If source or decompiled control flow confirms an update mechanism, "
-            "review its package-authentication and transport-validation logic "
-            "before drawing a security conclusion."
-        ),
-        tags=["signature", "auto-update", "heuristic"],
-        confidence="Low",
-        poc=(
-            f"1. Confirm the string indicator with `strings` or a PE viewer: "
-            f"'{matched_kw}'.\n"
-            "2. Review source or decompiled control flow to establish whether "
-            "the string is used by an updater and how payload verification is "
-            "performed. A missing import is not proof that verification is absent.\n"
-            "3. Do not test by intercepting or replacing payloads for this "
-            "third-party binary. Any runtime validation must use a deliberately "
-            "isolated, authorized lab fixture."
-        ),
+        evidence=", ".join(urls),
+        description=f"Update/download endpoints referenced over HTTPS. The binary {trust_note}.",
+        remediation="Confirm the updater verifies a signature or pinned hash on downloaded packages.",
+        tags=["signature", "auto-update"],
+        confidence="Medium",
+        extra={"update_urls": urls},
+        poc=poc,
     )
 
 

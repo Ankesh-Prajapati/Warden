@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -116,3 +117,14 @@ def load_rules(rules_dir: Path | None = None, warn=None) -> list[Rule]:
         raise RuleLoadError(f"No valid rules loaded from {rules_dir}")
 
     return all_rules
+
+
+@lru_cache(maxsize=1)
+def component_thresholds() -> dict:
+    """Version thresholds for bundled runtimes (rules/components.yaml)."""
+    path = Path(__file__).resolve().parent.parent / "rules" / "components.yaml"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        return {}

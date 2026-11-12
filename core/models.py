@@ -124,4 +124,4 @@ class ScanMetadata:
     module_execution_counts: dict[str, int] = field(default_factory=dict)
     module_input_execution_counts: dict[str, int] = field(default_factory=dict)
     module_extracted_execution_counts: dict[str, int] = field(default_factory=dict)
-    tool_version: str = "1.1.2"
+    tool_version: str = "1.2.0"

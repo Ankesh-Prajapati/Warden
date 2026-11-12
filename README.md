@@ -73,7 +73,7 @@ malware analysis.
 | Secrets and Config Exposure | All | Secrets, JWTs, database connection strings, auth/config settings, entropy candidates |
 | DLL Hijacking Detection | Windows | Phantom imports, DLL search-order exposure, writable paths, unquoted service paths, generated proof-of-concept test case per phantom import |
 | Signature / Integrity Check | Windows | Authenticode presence, certificate details, chain summary, timestamp, publisher consistency |
-| RE / Anti-Tamper Exposure | Windows | ASLR/DEP/CFG/SafeSEH, packers, PDB leaks, strings, YARA, crypto/framework indicators |
+| RE / Anti-Tamper Exposure | Windows | ASLR/DEP/CFG/SafeSEH, packers, PDB leaks, outdated NSIS, Electron fuses/webPreferences/navigation/version, YARA |
 | Binary Analysis | Windows | Embedded manifests, privilege settings, imported-DLL dependency graph |
 | Linux Thick-Client Assessment | Linux | ELF hardening, SUID/SGID, service paths, AppImage/Flatpak/Snap metadata, SBOM inventory |
 | macOS Thick-Client Assessment | macOS | Mach-O metadata, signing, notarization, hardened runtime, entitlements, URL schemes |
@@ -290,6 +290,17 @@ Windows reverse-engineering checks include:
 - Embedded manifest analysis including `requestedExecutionLevel`,
   `autoElevate`, `uiAccess`, and related privilege settings.
 - Imported-DLL dependency graph data included in report context.
+- Electron apps (app.asar is unpacked automatically): runtime fuses
+  (RunAsNode, NODE_OPTIONS, --inspect, ASAR integrity, OnlyLoadAppFromAsar),
+  ASAR integrity on an unsigned executable, outdated Electron/Chromium,
+  BrowserWindow `webPreferences`, navigation/window-open guards, ignored
+  certificate errors, auto-granted permissions.
+- Outdated NSIS installer runtime (CVE-2023-37378).
+
+Inventory output (URLs, domains, GUIDs, dependency graph, frameworks, crypto
+references, benign manifests, verified hardening controls) is kept out of the
+findings list and severity counts and shown in the report's
+"Reverse-engineering inventory" appendix (`inventory` in the JSON).
 - Unbundled DLL imports are reported with static verification steps.
 
 <h2 id="signature-analysis" align="center">Signature Analysis</h2>

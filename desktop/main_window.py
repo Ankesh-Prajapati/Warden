@@ -1035,6 +1035,11 @@ class MainWindow(QMainWindow):
         self.status_files_label.setText(f"{result.metadata.files_scanned} files scanned")
         self.summary_label.setText(self._format_scan_summary(result))
         self.summary_label.setToolTip(self._format_scan_summary_detail(result))
+        if getattr(result, "inventory", None):
+            self._append_log(
+                f"{len(result.inventory)} reverse-engineering inventory item(s) (not findings) are in the report appendix",
+                "info",
+            )
         if result.findings:
             self._set_results_state("results")
         else:
