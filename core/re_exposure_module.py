@@ -27,12 +27,15 @@ import re
 import yaml
 
 from core.cache_utils import ScanCache, sha256_file
+from core.rules import component_thresholds
+from core import electron_checks
 from core.fs_walk import find_pe_files
 from core.models import Finding, Severity
 from core.pe_utils import (
     MitigationInfo,
     PEInfo,
     extract_strings_from_bytes,
+    get_security_directory_bytes,
     get_security_mitigations,
     get_version_strings,
     parse_pe,
@@ -268,6 +271,15 @@ def _mitigation_findings(pe_path: Path, mit: MitigationInfo) -> list[Finding]:
             )
         )
 
+    # NSIS plugins ($PLUGINSDIR) are unpacked to a per-run temp folder and
+    # live only for the few seconds the installer runs: a missing mitigation
+    # there is far less exposed than in the shipped application.
+    if "$PLUGINSDIR" in Path(pe_path).parts:
+        for f in findings:
+            if f.severity in (Severity.HIGH, Severity.MEDIUM):
+                f.severity = Severity.LOW
+                f.title += " (installer plugin, runs only during setup)"
+                f.tags.append("installer-plugin")
     return findings
 
 
@@ -324,7 +336,7 @@ def _packer_findings(pe_path: Path, pe_info: PEInfo, signatures: dict) -> list[F
             Finding(
                 module="re_exposure",
                 rule_id="high-entropy-section",
-                title="High-entropy PE section (possible unrecognized packer/encryption)",
+                title="Packed or encrypted PE section (high entropy, unrecognized packer)",
                 severity=Severity.LOW,
                 file_path=str(pe_path),
                 evidence=f"Section(s) with entropy >= {HIGH_SECTION_ENTROPY_THRESHOLD}: {names}",
@@ -427,7 +439,7 @@ def _pdb_leak_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
     return Finding(
         module="re_exposure",
         rule_id="embedded-pdb-path-leak",
-        title="Embedded PDB debug path leakage",
+        title="Build environment path disclosed via embedded PDB path",
         severity=Severity.LOW,
         file_path=str(pe_path),
         evidence=f"PDB path: {pe_info.pdb_path}",
@@ -723,7 +735,12 @@ def _manifest_findings(pe_path: Path, pe_info: PEInfo) -> list[Finding]:
     return [Finding(
         module="re_exposure",
         rule_id="manifest-privilege-settings",
-        title="Manifest privilege settings detected",
+        title=(
+            "Manifest auto-elevates without a UAC prompt (autoElevate)" if auto_elevate
+            else f"Manifest requests elevated execution ({attr_values.get('requestedExecutionLevel')})" if is_elevated
+            else "Manifest grants uiAccess (UIPI bypass for assistive UI)" if ui_access
+            else "Manifest runs as invoker (no elevation requested)"
+        ),
         severity=severity,
         file_path=str(pe_path),
         evidence=evidence,
@@ -742,6 +759,45 @@ def _manifest_findings(pe_path: Path, pe_info: PEInfo) -> list[Finding]:
         confidence="High",
         extra={"manifest": xml, "attributes": attr_values},
     )]
+
+
+_NSIS_VERSION_RE = re.compile(r"Nullsoft Install System v(\d+)\.(\d+)", re.IGNORECASE)
+
+
+def _outdated_installer_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
+    """NSIS stamps its version into the installer manifest description."""
+    m = _NSIS_VERSION_RE.search(pe_info.manifest_xml or "")
+    if not m:
+        return None
+    version = (int(m.group(1)), int(m.group(2)))
+    fixed = tuple(component_thresholds().get("nsis_min_fixed", (3, 9)))
+    if version >= fixed:
+        return None
+    shown, fixed_shown = f"{version[0]}.{version[1]:02d}", f"{fixed[0]}.{fixed[1]:02d}"
+    return Finding(
+        module="re_exposure",
+        rule_id="outdated-nsis-installer",
+        title=f"Outdated NSIS installer runtime v{shown} (CVE-2023-37378, local privilege escalation)",
+        severity=Severity.LOW,
+        file_path=str(pe_path),
+        evidence=f"Embedded manifest: \"{m.group(0)}\" (fixed in NSIS {fixed_shown})",
+        description=(
+            f"This installer/uninstaller was built with NSIS {shown}. NSIS releases before "
+            f"{fixed_shown} mishandle access control for the uninstaller directory "
+            "(CVE-2023-37378): when the installer or uninstaller runs elevated, a "
+            "low-privileged local user can tamper with files it then executes."
+        ),
+        remediation=f"Rebuild the installer with NSIS {fixed_shown} or later (or a current electron-builder, which bundles a fixed NSIS).",
+        tags=["installer", "nsis", "outdated-component", "cve", "permissions"],
+        confidence="High",
+        extra={"nsis_version": shown, "fixed_in": fixed_shown},
+        poc=(
+            "1. Show the stamped version:\n"
+            f"     mt.exe -inputresource:\"{pe_path};#1\" -out:manifest.xml ; Select-String manifest.xml -Pattern 'Nullsoft Install System'\n"
+            f"2. Expected: Nullsoft Install System v{shown} (vulnerable: below {fixed_shown}).\n"
+            "3. Reference: https://nvd.nist.gov/vuln/detail/CVE-2023-37378"
+        ),
+    )
 
 
 def _dependency_graph_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
@@ -831,7 +887,8 @@ def run(
                 continue
 
             # Extract strings once and share them across every check below.
-            strings = [s for s, _ in extract_strings_from_bytes(pe_path.read_bytes())]
+            data = pe_path.read_bytes()
+            strings = [s for s, _ in extract_strings_from_bytes(data)]
             mit = get_security_mitigations(pe_path)
             file_findings = [
                 *_mitigation_findings(pe_path, mit),
@@ -842,8 +899,11 @@ def run(
                 *_artifact_findings(pe_path, strings, frozenset(fn for funcs in pe_info.imported_functions.values() for fn in funcs)),
                 *_crypto_framework_findings(pe_path, pe_info, strings),
                 *_manifest_findings(pe_path, pe_info),
+                _outdated_installer_finding(pe_path, pe_info),
                 _dependency_graph_finding(pe_path, pe_info),
                 *_yara_findings(pe_path, yara_rules),
+                *(electron_checks.check_runtime(pe_path, data, get_security_directory_bytes(pe_path) is not None)
+                  if electron_checks.FUSE_SENTINEL in data else []),
             ]
             file_findings = [f for f in file_findings if f is not None]
             _add(file_findings)
@@ -854,4 +914,10 @@ def run(
                 error_callback(f"re_exposure: skipped '{pe_path}' after error: {e}")
             continue
 
+    if single_file is None:  # an extracted app.asar / installed resources/app
+        try:
+            _add(electron_checks.check_app_sources(target_dir))
+        except Exception as e:
+            if error_callback:
+                error_callback(f"re_exposure: Electron source checks failed: {e}")
     return all_findings

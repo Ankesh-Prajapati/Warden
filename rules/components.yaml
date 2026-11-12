@@ -1,0 +1,9 @@
+# Version thresholds for bundled third-party runtimes. Update these as new
+# fixes ship; no code change needed.
+
+# Electron supports its latest three major lines. Anything older ships a
+# Chromium/V8 with publicly known, unpatched CVEs.
+electron_min_supported_major: 42
+
+# CVE-2023-37378 (uninstaller directory ACLs) fixed in NSIS 3.09.
+nsis_min_fixed: [3, 9]

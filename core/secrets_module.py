@@ -1138,8 +1138,11 @@ def _scan_text_content(
                 continue
             if _entropy_candidate_has_benign_context(candidate, content, offset):
                 continue
-            if source_locations is not None and (
-                _looks_like_symbol_name(candidate) or _looks_like_bignum_constant(candidate)
+            # Identifiers built from whole words (minified-JS function names
+            # like "checkTensorForDisposalWithNodeLiveUntilInfo", exported
+            # symbols in binaries) are code, not secrets, in any file type.
+            if _looks_like_symbol_name(re.sub(r"(?:=+[A-Za-z_$][\w$]*|=+)$", "", candidate)) or (
+                source_locations is not None and _looks_like_bignum_constant(candidate)
             ):
                 continue
             if _inside_pem_block(content, offset):
@@ -1151,7 +1154,7 @@ def _scan_text_content(
                 Finding(
                     module="secrets",
                     rule_id="high-entropy-string",
-                    title="Unclassified high-entropy string",
+                    title="Possible hardcoded secret (unclassified high-entropy string)",
                     severity=Severity.LOW,
                     file_path=file_path,
                     evidence=candidate,
