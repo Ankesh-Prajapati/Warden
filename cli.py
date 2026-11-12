@@ -52,7 +52,7 @@ def cli():
 @click.option("--hide-inventory", is_flag=True, help="Hide low-risk inventory/pass findings from Linux/macOS modules.")
 @click.option("--no-extract-archives", is_flag=True, help="Skip unpacking installers/archives (NSIS/InnoSetup/MSI/ZIP/CAB/7z, or a plain PE with a nested archive in a resource). On by default; requires the '7z' binary on PATH, and is silently skipped (never a hard failure) if it isn't found.")
 @click.option("--archive-max-depth", default=2, show_default=True, help="Max nesting depth when recursively unpacking archives-within-archives.")
-@click.option("--archive-max-size-mb", default=500, show_default=True, help="Cap on total extracted content size per archive, as zip-bomb protection.")
+@click.option("--archive-max-size-mb", default=2048, show_default=True, help="Cap on total extracted content size per archive, as zip-bomb protection.")
 def scan(target, output, json_output, rules_dir, no_entropy, no_pe_strings, modules, services_file, no_osslsigncode,
          vt_api_key, vt_include_clean, vt_max_lookups, vt_upload_unknown, incremental, cache_file,
          yara_rules_dir, plugins_dir, max_workers, hide_inventory,

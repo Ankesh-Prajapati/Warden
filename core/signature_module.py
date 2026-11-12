@@ -764,20 +764,11 @@ def _auto_update_finding(pe_path: Path) -> Finding | None:
     exists or whether downloaded content is verified.
     """
     try:
-        data = pe_path.read_bytes().lower()
+        raw = pe_path.read_bytes()
     except OSError:
         return None
-
-    # Search raw bytes (ASCII and UTF-16LE forms) instead of running a full
-    # string extraction a third time for one keyword check.
-    matched_kw = next(
-        (
-            kw for kw in UPDATE_KEYWORDS
-            if kw.encode() in data or kw.encode("utf-16-le") in data
-        ),
-        None,
-    )
-    if matched_kw is None:
+    data = raw.lower()
+    if not any(kw.encode() in data or kw.encode("utf-16-le") in data for kw in UPDATE_KEYWORDS):
         return None
 
     pe_info = parse_pe(pe_path)
@@ -789,6 +780,27 @@ def _auto_update_finding(pe_path: Path) -> Finding | None:
         for funcs in pe_info.imported_functions.values()
         for fn in funcs
     }
+
+    # Win32 API names (UpdateWindow, UpdateResourceW) contain "update" in
+    # nearly every GUI binary; only strings that are not imports count.
+    def real_hit(kw: str) -> bool:
+        if kw.encode("utf-16-le") in data:
+            return True
+        needle, pos = kw.encode(), data.find(kw.encode())
+        while pos != -1:  # linear scan: no regex backtracking on 200 MB binaries
+            start, end = pos, pos + len(needle)
+            while start > 0 and pos - start < 128 and 0x21 <= data[start - 1] <= 0x7E:
+                start -= 1
+            while end < len(data) and end - pos < 128 and 0x21 <= data[end] <= 0x7E:
+                end += 1
+            if data[start:end].decode("ascii", "ignore") not in all_funcs:
+                return True
+            pos = data.find(needle, end)
+        return False
+
+    matched_kw = next((kw for kw in UPDATE_KEYWORDS if real_hit(kw)), None)
+    if matched_kw is None:
+        return None
     has_trust_api = bool(all_funcs & TRUST_VERIFY_APIS)
 
     trust_import_note = (

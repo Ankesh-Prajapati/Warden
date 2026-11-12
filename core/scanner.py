@@ -147,7 +147,7 @@ def run_scan(
     include_inventory: bool = True,
     extract_archives: bool = True,
     archive_max_depth: int = 2,
-    archive_max_size_mb: int = 500,
+    archive_max_size_mb: int = 2048,
     archive_max_candidates: int = 25,
 ) -> ScanResult:
     """

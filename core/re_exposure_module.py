@@ -523,10 +523,16 @@ def _looks_like_plausible_domain(candidate: str) -> bool:
     digit_count = sum(1 for c in sld if c.isdigit())
     if digit_count > len(sld) / 2:
         return False
+    # Compressed/packed data yields "ENE.cN", "OIw.dE", "N1O.FR": real names
+    # are lowercase, Capitalised, or fully upper-case letters per label.
+    if not all(l.islower() or l.isupper() or l.istitle() or l.isdigit() for l in labels):
+        return False
+    if candidate.isupper() and (len(sld) <= 3 or any(c.isdigit() for c in sld)):
+        return False
     return True
 
 
-def _artifact_findings(pe_path: Path, strings: list[str]) -> list[Finding]:
+def _artifact_findings(pe_path: Path, strings: list[str], api_names: frozenset[str] = frozenset()) -> list[Finding]:
     joined = "\n".join(strings)
     patterns = {
         "url": URL_RE,
@@ -584,7 +590,13 @@ def _artifact_findings(pe_path: Path, strings: list[str]) -> list[Finding]:
                 confidence="Medium",
                 extra={name: safe_matches},
             ))
-    interesting = [s for s in strings if any(k in s.lower() for k in ("password", "secret", "license", "debug", "admin", "token"))][:25]
+    # Win32 API names (OpenProcessToken) and XML manifests (publicKeyToken)
+    # merely contain the keywords; they are inventory, not leaked logic.
+    interesting = [
+        s for s in strings
+        if len(s) <= 200 and not s.lstrip().startswith("<") and s not in api_names
+        and any(k in s.lower() for k in ("password", "secret", "license", "debug", "admin", "token"))
+    ][:25]
     if interesting:
         safe_interesting = interesting
         findings.append(Finding(
@@ -604,9 +616,16 @@ def _artifact_findings(pe_path: Path, strings: list[str]) -> list[Finding]:
 
 
 def _crypto_framework_findings(pe_path: Path, pe_info: PEInfo, strings: list[str]) -> list[Finding]:
-    haystack = "\n".join(strings + pe_info.imported_dlls + [fn for funcs in pe_info.imported_functions.values() for fn in funcs]).lower()
+    imports = "\n".join(pe_info.imported_dlls + [fn for funcs in pe_info.imported_functions.values() for fn in funcs]).lower()
+    text = "\n".join(strings).lower()
+
+    def present(marker: str) -> bool:
+        # Imports by substring (CryptAcquireContextW); strings only as a whole
+        # token, or "rsa"/"aes" turn up inside random bytes of packed payloads.
+        return marker in imports or re.search(rf"(?<![a-z0-9]){re.escape(marker)}(?![a-z0-9])", text) is not None
+
     findings = []
-    crypto = [name for name, markers in CRYPTO_MARKERS.items() if any(m in haystack for m in markers)]
+    crypto = [name for name, markers in CRYPTO_MARKERS.items() if any(present(m) for m in markers)]
     if crypto:
         findings.append(Finding(
             module="re_exposure",
@@ -621,7 +640,12 @@ def _crypto_framework_findings(pe_path: Path, pe_info: PEInfo, strings: list[str
             confidence="Medium",
             extra={"crypto": crypto},
         ))
-    frameworks = [name for name, markers in FRAMEWORK_MARKERS.items() if any(m in haystack for m in markers)]
+    # .NET is a fact of the import table (mscoree.dll), not of strings: 7-Zip
+    # merely mentions mscoree.dll in its PE parser.
+    frameworks = [
+        name for name, markers in FRAMEWORK_MARKERS.items()
+        if ("mscoree.dll" in {d.lower() for d in pe_info.imported_dlls} if name == ".NET" else any(present(m) for m in markers))
+    ]
     if frameworks:
         findings.append(Finding(
             module="re_exposure",
@@ -815,7 +839,7 @@ def run(
                 _dotnet_obfuscation_finding(pe_path, pe_info, signatures, strings),
                 _pdb_leak_finding(pe_path, pe_info),
                 _anti_debug_finding(pe_path, pe_info),
-                *_artifact_findings(pe_path, strings),
+                *_artifact_findings(pe_path, strings, frozenset(fn for funcs in pe_info.imported_functions.values() for fn in funcs)),
                 *_crypto_framework_findings(pe_path, pe_info, strings),
                 *_manifest_findings(pe_path, pe_info),
                 _dependency_graph_finding(pe_path, pe_info),

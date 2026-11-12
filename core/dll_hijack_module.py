@@ -304,7 +304,9 @@ def _search_order_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
             module="dll_hijack",
             rule_id="dll-search-order-exposure",
             title="Dynamic library loading without safe search-order controls",
-            severity=Severity.MEDIUM,
+            # A DLL inherits its host process's search order (e.g. the
+            # installer's SetDefaultDllDirectories), so its imports alone are weak.
+            severity=Severity.LOW if pe_info.is_dll else Severity.MEDIUM,
             file_path=str(pe_path),
             evidence="Imports LoadLibrary(A/W) but no evidence of safe search-order controls detected",
             description=(
