@@ -1,566 +1,253 @@
-<img src="assets/readme.PNG" alt="Warden Logo" width="100%"/>
+<img src="assets/readme.PNG" alt="Warden" width="100%"/>
 
 <div align="center">
 
-# Warden
+# 🛡️ Warden
 
-**Static Security Analysis for Thick-Client Desktop Applications**
+### Static security analysis for thick-client desktop applications
 
+*Catch the findings a manual reverse-engineer would — unsigned binaries, trust-all TLS,
+insecure deserialization, weak crypto, DLL hijacking, leaked secrets — **without running the target.***
+
+[![Latest Release](https://img.shields.io/github/v/release/Ankesh-Prajapati/Warden?label=download&color=2ea44f)](https://github.com/Ankesh-Prajapati/Warden/releases/latest)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-Proprietary-lightgrey.svg)](#)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-informational.svg)](#)
-[![Status](https://img.shields.io/badge/status-Active-success.svg)](#)
+[![Static Only](https://img.shields.io/badge/analysis-static--only-8957e5.svg)](#-what-warden-is-and-isnt)
+[![Status](https://img.shields.io/badge/status-active-success.svg)](#)
 
-*Author: [Ankesh Prajapati](https://github.com/Ankesh-Prajapati)*
+<samp>**[⬇ Download EXE](https://github.com/Ankesh-Prajapati/Warden/releases/latest)** · [Highlights](#-highlights) · [What it catches](#-what-it-catches) · [Quick start](#-quick-start) · [Reports](#-reports) · [⚠ Authorized use only](#️-authorized-use-only)</samp>
 
 </div>
 
 ---
 
-## 🖼️ Application Screenshots
+## 🚀 Highlights
 
-The following screenshots showcase the user interface, core functionality, and overall user experience.
-<img src="assets/screenshot.png" alt="Warden Logo" width="100%"/>
+<table>
+<tr>
+<td width="33%" valign="top">
 
-<img src="assets/screenshot (1).png" alt="Warden Logo" width="100%"/>
+### 🧊 Opens real installers
+Unpacks **NSIS, Inno Setup, MSI, Electron (`app.asar`), 7z/ZIP/CAB** — and even a plain PE carrying a nested archive — then scans the **actual application**, not just the wrapper.
 
-<h2 id="overview" align="center">Overview</h2>
+</td>
+<td width="33%" valign="top">
 
-Warden is a static security analysis tool for thick-client desktop
-applications. It scans extracted application folders or individual binaries
-**without executing the target**, and produces a deduplicated, professional
-HTML report plus optional JSON output.
+### 🔬 Reads the bytecode
+Goes past strings: parses **.NET metadata + IL** (`dnfile`) and **Java `.class`/`.jar`** to prove real API usage — trust-all TLS, insecure deserialization, weak crypto.
 
-Supported assessment areas include Windows PE applications, Linux desktop
-packages/binaries, macOS app bundles, secrets and configuration exposure,
-reverse-engineering exposure, binary hardening, code-signing integrity, and
-optional VirusTotal reputation checks.
+</td>
+<td width="33%" valign="top">
 
-<h2 id="table-of-contents" align="center">Table of Contents</h2>
+### 📑 Report you can hand over
+A clean, filterable **HTML/JSON report** — executive summary, findings index, evidence, remediation, copy-paste PoC, and a print-to-PDF layout. Noise lives in a separate appendix.
 
-- [What Warden Does](#what-warden-does)
-- [Key Features](#key-features)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Desktop App](#desktop-app)
-- [CLI](#cli)
-- [Secrets And Configuration Intelligence](#secrets-and-configuration-intelligence)
-- [Reverse Engineering And Binary Analysis](#reverse-engineering-and-binary-analysis)
-- [Signature Analysis](#signature-analysis)
-- [Linux Assessment](#linux-assessment)
-- [macOS Assessment](#macos-assessment)
-- [VirusTotal Reputation](#virustotal-reputation)
-- [Custom Rules And Plugins](#custom-rules-and-plugins)
-- [Reports](#reports)
-- [Project Structure](#project-structure)
-- [Known Limitations](#known-limitations)
-- [Release Hygiene](#release-hygiene)
-- [Legal And Ethical Use](#legal-and-ethical-use)
+</td>
+</tr>
+</table>
+
+> **Static-only by design.** Warden reads and parses — it never executes the target, hooks processes, or exploits anything. It automates the *static* half of a thick-client assessment so your manual time goes to the dynamic and business-logic work.
 
 ---
 
-<h2 id="what-warden-does" align="center">What Warden Does</h2>
+## 🎯 What it catches
 
-Warden is static-only. It reads files, parses metadata, extracts indicators,
-and analyzes configuration. It does **not** run the target application,
-exploit anything, hook processes, bypass protections, or perform dynamic
-malware analysis.
+<div align="center"><em>Technology-aware deep checks — the findings a manual review in dnSpy / CFR / CFF Explorer would surface, automated.</em></div>
 
-<h3 id="core-capabilities" align="center">Core Capabilities</h3>
-
-| Module | Platform | Coverage |
-|---|---|---|
-| Secrets and Config Exposure | All | Secrets, JWTs, database connection strings, auth/config settings, entropy candidates |
-| DLL Hijacking Detection | Windows | Phantom imports, DLL search-order exposure, writable paths, unquoted service paths, generated proof-of-concept test case per phantom import |
-| Signature / Integrity Check | Windows | Authenticode presence, certificate details, chain summary, timestamp, publisher consistency |
-| RE / Anti-Tamper Exposure | Windows | ASLR/DEP/CFG/SafeSEH, packers, PDB leaks, outdated NSIS, Electron fuses/webPreferences/navigation/version, YARA |
-| Binary Analysis | Windows | Embedded manifests, privilege settings, imported-DLL dependency graph |
-| Linux Thick-Client Assessment | Linux | ELF hardening, SUID/SGID, service paths, AppImage/Flatpak/Snap metadata, SBOM inventory |
-| macOS Thick-Client Assessment | macOS | Mach-O metadata, signing, notarization, hardened runtime, entitlements, URL schemes |
-| VirusTotal Reputation Check | All | Optional SHA-256 hash lookup; upload is separate explicit opt-in |
-
-<h2 id="key-features" align="center">Key Features</h2>
-
-- Native PySide6 desktop app with light and dark themes.
-- CLI using the same scanner engine as the desktop app.
-- HTML report with executive dashboard, severity summary, risk heatmap,
-  MITRE ATT&CK mapping, CWE mapping, confidence score, remediation guidance,
-  attack surface summary, grouped findings, and proof-of-concept steps.
-- Deduplicated findings in both the desktop table and the report.
-- SHA-256 incremental scan cache to avoid rescanning unchanged files.
-- Multithreaded scanning where appropriate.
-- Custom YARA rules for reverse-engineering scans.
-- Python detector plugin hooks for trusted custom modules.
-- Desktop reports grouped per scanned application —
-  `reports/<AppName>/<AppName>_report_<timestamp>.html/.json` — next to the app, falling back to
-  `~/.warden/reports` when the install folder is read-only (e.g. Program Files).
-
-<h2 id="installation" align="center">Installation</h2>
-
-**Standalone Windows app (no Python needed):** download `Warden.exe` from the
-[latest release](https://github.com/Ankesh-Prajapati/Warden/releases/latest)
-and double-click it. Install 7-Zip if you want installer/archive extraction.
-
-**From source** — requires **Python 3.10+**.
-
-**Windows:**
-
-```powershell
-PS> git clone <repo-url> Warden
-PS> cd Warden
-PS> python -m venv venv
-PS> venv\Scripts\activate
-PS> pip install -r requirements.txt
-```
-
-**Linux / macOS:**
-
-```bash
-$ git clone <repo-url> Warden
-$ cd Warden
-$ python3 -m venv venv
-$ source venv/bin/activate
-$ pip install -r requirements.txt
-```
-
-<h3 id="optional-tools" align="center">Optional Tools</h3>
-
-| Tool | Purpose |
+| Surface | Representative findings |
 |---|---|
-| `osslsigncode` | Authenticode digest verification on Linux/macOS (on Windows the built-in WinVerifyTrust API is used, no install needed) |
-| `readelf` | Deeper ELF hardening/library analysis on Linux |
-| `otool`, `codesign`, `spctl` | Deeper Mach-O signing/notarization analysis on macOS |
-| `yara-python` | Listed in `requirements.txt`; custom YARA scans are skipped gracefully if unavailable |
-| `7z` (7-Zip / p7zip-full) | Installer/archive extraction (see below) — found on PATH or in `Program Files\7-Zip`; skipped with a note if not found, never a hard failure |
+| 🪟 **Windows PE** | Unsigned / tampered / expired signing · ASLR · DEP · CFG · SafeSEH · packers · PDB & build-path leaks · embedded manifest / privilege level |
+| 🧩 **DLL hijacking** | Phantom imports · unsafe search-order · writable binary dirs · unquoted service paths — each with a reproduction PoC |
+| 🟣 **.NET** *(metadata + IL)* | Insecure deserialization (`BinaryFormatter`, `SoapFormatter`, `LosFormatter`, `JavaScriptSerializer`+resolver, Remoting) · weak crypto (DES/RC2/3DES/MD5) · **TLS validation disabled** · weak TLS protocol pinned |
+| ☕ **Java** *(bytecode)* | Trust-all `TrustManager` / `HostnameVerifier` · weak cipher (DES/RC4/ECB) · weak hash (MD5/SHA-1) · `ObjectInputStream` deserialization · hardcoded JDBC credentials |
+| ⚛️ **Electron** | Runtime fuses (RunAsNode, NODE_OPTIONS, `--inspect`, ASAR integrity) · ASAR integrity on an unsigned EXE · risky `webPreferences` · missing navigation guards · outdated Chromium |
+| 🔑 **Secrets & config** | API keys/tokens · JWTs (decoded) · DB connection strings · correlated secret bundles · high-entropy candidates · JSON/XML/YAML/INI/TOML/SQLite/plist settings |
+| 🐧 **Linux** | ELF hardening (PIE/NX/RELRO/canary/RPATH) · SUID/SGID · unsafe systemd `ExecStart` · AppImage/Flatpak/Snap metadata |
+| 🍎 **macOS** | Mach-O signing · hardened runtime · notarization · risky entitlements · unsafe URL schemes · quarantine-bypass risk |
+| 🧰 **Installers** | Outdated NSIS runtime (CVE-2023-37378) · non-production API endpoints baked into release builds · Inno Setup payload unpacking |
+| 🧪 **Reputation** | *Opt-in* VirusTotal SHA-256 lookup (hash only unless you explicitly enable upload) |
 
-<h2 id="quick-start" align="center">Quick Start</h2>
+---
 
-**Desktop app:**
+## 📦 Install
 
-```powershell
-PS> python desktop\main.py
-```
+### Option A — Standalone Windows app *(no Python)*
+**[⬇ Download `Warden.exe`](https://github.com/Ankesh-Prajapati/Warden/releases/latest)** and double-click. That's it — one file, no console window.
+*Install [7-Zip](https://www.7-zip.org/) for installer/archive extraction; [innoextract](https://constexpr.org/innoextract/) if you assess Inno Setup installers.*
 
-**CLI, default secrets scan:**
-
-```bash
-$ python cli.py scan ./target --output report.html
-```
-
-**CLI, common Windows modules:**
-
-```bash
-$ python cli.py scan ./target \
-    --module secrets \
-    --module dll_hijack \
-    --module signature \
-    --module re_exposure \
-    --output report.html \
-    --json findings.json
-```
-
-**CLI with Linux/macOS inventory hidden:**
+### Option B — From source *(Python 3.10+)*
 
 ```bash
-$ python cli.py scan ./target --module linux --hide-inventory
-$ python cli.py scan ./target --module macos --hide-inventory
+git clone https://github.com/Ankesh-Prajapati/Warden.git && cd Warden
+python -m venv venv && source venv/bin/activate      # Windows: venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-<h2 id="desktop-app" align="center">Desktop App</h2>
+<details>
+<summary><b>Optional external tools</b> (each degrades gracefully if missing)</summary>
 
-Run:
+| Tool | Gives you |
+|---|---|
+| `7z` (7-Zip / p7zip) | Installer & archive extraction |
+| `innoextract` | Unpacking Inno Setup installer payloads |
+| `dnfile` *(pip, bundled in the EXE)* | .NET metadata + IL checks |
+| `osslsigncode` | Authenticode digest verification on Linux/macOS *(Windows uses the built-in `WinVerifyTrust`)* |
+| `readelf` | Deeper ELF analysis on Linux |
+| `otool`, `codesign`, `spctl` | Deeper Mach-O / notarization analysis on macOS |
+| `yara-python` | Custom YARA scans |
 
-```powershell
-PS> python desktop\main.py
-```
+</details>
 
-The desktop app supports:
+---
 
-- Folder scans and single `.exe` selection.
-- Common modules: Secrets, DLL Hijacking, Signature, RE/Anti-Tamper.
-- Platform modules: Linux and macOS thick-client assessment.
-- Entropy detection toggle.
-- Embedded PE string scanning toggle.
-- `osslsigncode` toggle.
-- Inventory findings toggle for Linux/macOS scans.
-- Optional services-file input for Windows service path checks.
-- Optional VirusTotal reputation checks.
-- Light and dark theme selection from the Theme menu.
-- Filterable, grouped findings table.
-- Double-click finding details with evidence, context, remediation, and PoC.
-- HTML and JSON reports written to `reports/<AppName>/` (one folder per scanned application).
-- The findings table, detail view, HTML report, and JSON export display complete
-  extracted evidence by default. Treat local reports as potentially sensitive.
+## ⚡ Quick start
 
-> **Note:** Desktop settings are persisted through Qt settings storage. The
-> VirusTotal API key is stored the same way as other desktop settings; for
-> high-security enterprise use, move this to OS credential storage before
-> distribution.
-
-<h2 id="cli" align="center">CLI</h2>
-
+**Desktop app**
 ```bash
-$ python cli.py scan TARGET [OPTIONS]
+python desktop/main.py          # or just run Warden.exe
 ```
 
-`TARGET` accepts either a directory (scans every file inside it) or a
-single file (e.g. `python cli.py scan app.exe`) for a quick one-off scan
-of a specific binary — matching the desktop app's "Select EXE" mode.
+**CLI**
+```bash
+# Full Windows pass → self-contained HTML + raw JSON
+python cli.py scan ./target \
+  --module secrets --module dll_hijack --module signature --module re_exposure \
+  --output report.html --json findings.json
 
-<h3 id="important-options" align="center">Important Options</h3>
+# Single binary, quick look
+python cli.py scan app.exe --output report.html
+```
+
+<details>
+<summary><b>All CLI options</b></summary>
 
 | Option | Description |
 |---|---|
 | `--output, -o PATH` | HTML report output path |
 | `--json PATH` | Also write raw JSON findings |
-| `--module NAME` | Repeatable module selector: `secrets`, `dll_hijack`, `signature`, `re_exposure`, `linux`, `macos`, `reputation` |
-| `--rules-dir PATH` | Override YAML secret rule directory |
+| `--module NAME` | Repeatable: `secrets`, `dll_hijack`, `signature`, `re_exposure`, `linux`, `macos`, `reputation` |
+| `--rules-dir PATH` | Override YAML secret-rule directory |
 | `--no-entropy` | Disable entropy-based secret detection |
 | `--no-pe-strings` | Skip embedded PE string scanning |
-| `--services-file PATH` | Optional `sc query` / `wmic service` text output for unquoted service path checks |
+| `--services-file PATH` | `sc query` / `wmic service` text for unquoted-service-path checks |
 | `--no-osslsigncode` | Skip `osslsigncode` verification |
-| `--vt-api-key KEY` | VirusTotal API key, also accepted via `VT_API_KEY` |
-| `--vt-include-clean` | Report known-clean VirusTotal results as Info |
-| `--vt-max-lookups N` | Maximum VirusTotal lookups per scan, default `15` |
-| `--vt-upload-unknown` | Upload unknown binaries to VirusTotal; off by default |
-| `--incremental` | Enable SHA-256 cache for supported modules |
-| `--cache-file PATH` | Override incremental cache file |
+| `--vt-api-key KEY` | VirusTotal API key (or `VT_API_KEY`) |
+| `--vt-include-clean` / `--vt-max-lookups N` / `--vt-upload-unknown` | VirusTotal tuning (upload is off by default) |
+| `--incremental` / `--cache-file PATH` | SHA-256 incremental scan cache |
 | `--yara-rules-dir PATH` | Custom YARA rules folder |
 | `--plugins-dir PATH` | Trusted Python detector plugins exposing `scan_file(path)` |
 | `--max-workers N` | Worker count for supported scans |
-| `--hide-inventory` | Hide Linux/macOS inventory/pass findings |
+| `--hide-inventory` | Hide inventory/pass findings |
 | `--no-extract-archives` | Skip installer/archive extraction (on by default) |
-| `--archive-max-depth N` | Max nesting depth for archives-within-archives (default 2) |
-| `--archive-max-size-mb N` | Cap on total extracted content per archive (default 500) |
+| `--archive-max-depth N` | Max nesting depth for archives-in-archives (default `2`) |
+| `--archive-max-size-mb N` | Cap on total extracted content per archive (default `2048`) |
 
-<h2 id="archive-and-installer-extraction" align="center">Archive And Installer Extraction</h2>
-
-On by default. Before scanning, Warden unpacks installer/archive-looking
-files (NSIS, InnoSetup, MSI, self-extracting installers, ZIP/CAB/7z — and
-even a plain PE that happens to carry a nested archive in one of its
-resources) using the system `7z` binary, then scans the extracted
-contents too, recursively up to `--archive-max-depth` levels.
-
-This matters: a real signed installer scanned during development carried
-a Cabinet archive inside a PE resource containing five bundled DLLs (an
-updater, an activation helper, a UI framework) that no other module looks
-inside — none of that would have been scanned without this step. Findings
-from extracted content are tagged `extracted-content` and note the
-originating archive in `extra["extracted_from"]`.
-
-Requires `7z` (7-Zip / p7zip-full) on PATH or in `Program Files\7-Zip` —
-skipped with a note if not found, never a hard failure; the outer file is
-still scanned exactly as before. Bounded by nesting depth, a
-total-extracted-size cap (zip-bomb protection, checked against the archive
-listing *before* anything is written), and a per-archive candidate cap in
-directory scans. When 7-Zip opens a plain PE, only nested archives found
-inside it are scanned — raw section dumps are discarded because the PE
-string scan already covers them.
-
-
-
-The secrets module scans text/config files and embedded binary strings.
-
-It detects:
-
-- Vendor-style API keys and tokens from `rules/secrets_patterns.yaml`.
-- JWTs, with decoded header and payload fields such as `alg`, `exp`, `iss`,
-  `aud`, and roles.
-- Database connection strings, parsed into host, port, database, username,
-  password, and SSL/TLS details.
-- Correlated secret bundles, such as username + password + endpoint + API key.
-- High-entropy candidate secrets with confidence scoring.
-- Structured config formats: JSON, XML, YAML, INI, TOML, SQLite, and plist.
-- Authentication, database, logging, TLS, and debug settings.
-
-<h2 id="reverse-engineering-and-binary-analysis" align="center">Reverse Engineering And Binary Analysis</h2>
-
-Windows reverse-engineering checks include:
-
-- ASLR, DEP/NX, CFG, and SafeSEH review.
-- Packer and protector signatures.
-- PDB/debug path leakage.
-- Anti-debug API indicators.
-- Interesting strings and indicators: URLs, IPs, domains, registry keys,
-  mutexes, GUIDs, named pipes, and suspicious keywords.
-- Crypto usage indicators: AES, RSA, RC4, MD5, SHA1, bcrypt, PBKDF2.
-- Compiler/framework indicators: .NET, Go, Rust, Delphi, VB, Java, Qt,
-  Electron.
-- YARA rules from a custom folder.
-- Embedded manifest analysis including `requestedExecutionLevel`,
-  `autoElevate`, `uiAccess`, and related privilege settings.
-- Imported-DLL dependency graph data included in report context.
-- Electron apps (app.asar is unpacked automatically): runtime fuses
-  (RunAsNode, NODE_OPTIONS, --inspect, ASAR integrity, OnlyLoadAppFromAsar),
-  ASAR integrity on an unsigned executable, outdated Electron/Chromium,
-  BrowserWindow `webPreferences`, navigation/window-open guards, ignored
-  certificate errors, auto-granted permissions.
-- Outdated NSIS installer runtime (CVE-2023-37378).
-
-Inventory output (URLs, domains, GUIDs, dependency graph, frameworks, crypto
-references, benign manifests, verified hardening controls) is kept out of the
-findings list and severity counts and shown in the report's
-"Reverse-engineering inventory" appendix (`inventory` in the JSON).
-- Unbundled DLL imports are reported with static verification steps.
-
-<h2 id="signature-analysis" align="center">Signature Analysis</h2>
-
-The signature module checks Windows PE Authenticode metadata:
-
-- Unsigned binaries.
-- Expired certificates.
-- Self-signed certificates.
-- Weak signature algorithms.
-- Certificate chain summary where available.
-- Timestamp presence (countersignature / RFC 3161 token in the signature).
-- Publisher consistency across binaries (signing certificates only).
-- Unknown publisher indicators.
-- Digest verification — detects files modified after signing — via Windows
-  `WinVerifyTrust` (offline, built in) or `osslsigncode verify` elsewhere.
-  If neither is available the report says the digest was not verified.
-
-The actual signing certificate is selected by chain position and
-codeSigning EKU — PKCS#7 does not keep certificates in order, so the first
-certificate is often a root CA.
-
-> Full Windows trust validation, revocation, and timestamp policy decisions
-> are best confirmed on Windows with `signtool verify /pa`.
-
-<h2 id="linux-assessment" align="center">Linux Assessment</h2>
-
-The Linux module statically assesses an application folder, package
-extraction, or AppImage-style tree.
-
-It checks:
-
-- ELF type, architecture, PIE, NX stack, RELRO, stack canary, Fortify symbols,
-  stripped symbols, RPATH/RUNPATH, and linked libraries.
-- SUID/SGID files.
-- Unsafe systemd service `ExecStart`, `ExecStop`, and `ExecReload` paths.
-- AppImage, Flatpak, and Snap metadata.
-- Desktop files, package metadata, config files, local databases, logs,
-  bundled certificates, persistence artifacts, update URLs, internal/dev
-  endpoints, and writable paths.
-- SBOM/library inventory for future CVE matching.
-
-Inventory/pass findings can be hidden with the desktop toggle or
-`--hide-inventory`.
-
-<h2 id="macos-assessment" align="center">macOS Assessment</h2>
-
-The macOS module statically assesses extracted `.app` bundles and related
-application folders.
-
-It checks:
-
-- Mach-O metadata and linked libraries.
-- Code-signing status.
-- Hardened runtime.
-- Notarization status where `spctl` is available.
-- Structured entitlement fields.
-- Risky entitlements such as debugging or unsigned executable memory.
-- Quarantine bypass risks.
-- Unsafe URL schemes and insecure `CFBundleURLTypes`.
-- LaunchAgents/Daemons, plist/config files, local databases, logs, bundled
-  certificates, update metadata, internal/dev endpoints, writable paths, and
-  SBOM/library inventory.
-
-> Some macOS checks require macOS command-line tools and are reported as
-> best-effort when run from Windows or Linux.
-
-<h2 id="virustotal-reputation" align="center">VirusTotal Reputation</h2>
-
-VirusTotal checks are **opt-in**.
-
-By default Warden sends only SHA-256 hashes to VirusTotal. The binary itself
-does not leave the machine unless `--vt-upload-unknown` or the matching
-desktop upload option is explicitly enabled.
-
-> Use upload only when you have permission to submit target binaries to a
-> third-party service. This is especially important for proprietary client
-> software.
-
-<h2 id="custom-rules-and-plugins" align="center">Custom Rules And Plugins</h2>
-
-Secret rules are YAML files under `rules/`.
-
-YARA rules can be stored under `rules/yara` or supplied with:
-
-```bash
-$ python cli.py scan ./target --module re_exposure --yara-rules-dir ./my-yara-rules
-```
-
-Python detector plugins can be supplied with:
-
-```bash
-$ python cli.py scan ./target --plugins-dir ./plugins
-```
-
-Each plugin file may expose:
-
-```python
-def scan_file(path):
-    return []
-```
-
-> Python plugins execute code from the selected folder. Treat plugin folders
-> as trusted code only.
-
-<h2 id="reports" align="center">Reports</h2>
-
-Reports are self-contained HTML files.
-
-**Desktop reports:**
-
-```text
-reports/
-```
-
-CLI reports are written to the path passed with `--output`.
-
-Scan metadata uses these definitions:
-
-- `files_scanned` is the number of unique file paths processed by one or more
-  selected analysis modules, counting each path once even when several modules
-  inspect it.
-- `input_files_scanned` counts unique files from the original target;
-  `extracted_files_scanned` counts unique files processed from extracted
-  archives. Their sum equals `files_scanned`.
-- `module_execution_counts` records total module invocations separately from
-  file counts. `module_input_execution_counts` and
-  `module_extracted_execution_counts` show which passes caused those calls;
-  archive-content passes can invoke the same module more than once.
-- `finding_groups` counts grouped issues (the report's top-level rows), while
-  `finding_instances` counts their individual source occurrences.
-
-The report includes:
-
-- Executive dashboard.
-- Severity counts.
-- Risk heatmap.
-- MITRE ATT&CK and CWE mapping.
-- Attack surface summary.
-- Confidence score.
-- Remediation guidance.
-- Grouped/deduplicated findings.
-- Detailed evidence and reproduction steps.
-
-The desktop finding details, HTML reports, JSON reports, and CLI outputs
-include the complete extracted evidence by default. These artifacts may contain
-credentials, tokens, or proprietary indicators; keep them local and share only
-with explicit authorization. Warden does not transmit local evidence or scanned
-file contents when generating reports. Optional VirusTotal lookups remain
-separate; file uploads require their existing explicit opt-in. Finding paths
-are relative to the scan root, and archive members use logical
-`archive > member` paths.
-
-```powershell
-PS> python cli.py scan .\target --module secrets --output build\local-report.html --json build\local-report.json
-```
-
-<h2 id="project-structure" align="center">Project Structure</h2>
-
-```text
-Warden/
-  assets/
-  core/
-    scanner.py
-    secrets_module.py
-    dll_hijack_module.py
-    signature_module.py
-    re_exposure_module.py
-    linux_module.py
-    macos_module.py
-    reputation_module.py
-    cache_utils.py
-    config_intel.py
-    plugin_system.py
-    finding_grouping.py
-    pe_utils.py
-    binary_utils.py
-    cert_utils.py
-    fs_walk.py
-    models.py
-  desktop/
-    main.py
-    main_window.py
-    scan_worker.py
-    finding_dialog.py
-    settings.py
-    theme.py
-  report/
-    html_export.py
-  tests/
-    test_scanner_entrypoints.py
-  rules/
-    secrets_patterns.yaml
-    system_dlls.yaml
-    packer_signatures.yaml
-  cli.py
-  requirements.txt
-  README.md
-```
-
-Both interfaces call `core.scanner.run_scan()`. Module output is normalized
-into `core.models.Finding` and rendered by `report.html_export`.
-
-<h3 id="testing" align="center">Testing</h3>
-
-Keep automated tests under `tests/` rather than adding test scripts to the
-repository root. Run the suite from the repository root with:
-
-```powershell
-PS> python -m pytest -q tests
-```
-
-<h2 id="known-limitations" align="center">Known Limitations</h2>
-
-- Warden is static-only. It does not prove exploitability.
-- Entropy findings are heuristic and can produce false positives.
-- VirusTotal hash lookup is reputation data, not a clean/malicious verdict by
-  itself.
-- Python plugins are trusted code and are not sandboxed.
-- Full Authenticode trust validation is best confirmed with Windows
-  `signtool`.
-- Some Linux/macOS details depend on external platform tools being available.
-- SQLite databases are read cell by cell (read-only), but encrypted
-  databases (SQLCipher etc.) cannot be inspected.
-- `--incremental` restores cached findings for unchanged files; delete
-  `.warden_cache/` after upgrading rule packs to force a full rescan.
-
-<h2 id="release-hygiene" align="center">Release Hygiene</h2>
-
-Before packaging or pushing:
-
-```powershell
-PS> python -m compileall .
-PS> python cli.py --help
-PS> python -m pytest -q tests
-```
-
-Build the standalone Windows app (one `Warden.exe`, no console window):
-
-```powershell
-PS> pip install pyinstaller
-PS> pyinstaller --noconfirm warden.spec      # output: dist\Warden.exe
-```
-
-Keep generated files out of source control:
-
-- `build/`
-- `dist/`
-- `__pycache__/`
-- `.pytest_cache/`
-- `.warden_cache/`
-- local virtual environments
-- generated reports and installer outputs
-
-<h2 id="legal-and-ethical-use" align="center">Legal And Ethical Use</h2>
-
-Use Warden only against applications you own or have explicit written
-authorization to assess. Do not use it against software or systems where you
-do not have permission.
+</details>
 
 ---
 
-Built and maintained by **[Ankesh Prajapati](https://github.com/Ankesh-Prajapati)**
+## 🧊 Archive & installer extraction
+
+On by default. Before scanning, Warden unpacks installer/archive-looking files — **NSIS, Inno Setup, MSI, Electron `app.asar`, self-extracting installers, ZIP/CAB/7z**, and even a plain PE carrying a nested archive in its resources — then recursively scans the extracted contents.
+
+Why it matters: a real Electron installer isn't the app. Warden opens `app-64.7z → app.asar → the renderer bundle`, an NSIS setup down to its plugin DLLs, and an Inno Setup installer via `innoextract`. Findings from extracted content are tagged `extracted-content` and note their origin. Bounded by nesting depth, a total-size cap (zip-bomb protection, checked *before* writing), and a per-archive candidate cap. Missing a tool is never fatal — the outer file is still scanned, with a note.
+
+---
+
+## 📑 Reports
+
+Self-contained, single-file **HTML** (plus optional **JSON**) you can send to a client or diff in CI:
+
+- **Executive summary** with risk rating and severity distribution
+- **Findings index** (`W-001…`) → filter by severity / area / full-text search
+- Per-finding **evidence, affected locations, remediation, and copy-paste PoC**
+- **Reverse-engineering inventory appendix** — endpoints, dependencies, frameworks, and *verified hardening controls* kept out of the findings count
+- **Print → PDF** layout; light & dark themes; renders cleanly from 0 to hundreds of findings
+
+> Reports contain complete extracted evidence (possibly credentials, tokens, proprietary indicators). Warden never transmits them — keep them local and share only with authorization. Desktop reports land in `reports/<AppName>/<AppName>_report_<timestamp>.html` next to the app (falling back to `~/.warden/reports` when the install folder is read-only).
+
+<details>
+<summary><b>Custom rules & plugins</b></summary>
+
+- **Secret rules** — YAML under `rules/`.
+- **YARA** — `rules/yara/` or `--yara-rules-dir ./my-yara`.
+- **Python detectors** — `--plugins-dir ./plugins`, each exposing `def scan_file(path): return []`.
+  *Plugins run as trusted code and are not sandboxed — only point Warden at folders you trust.*
+
+</details>
+
+<details>
+<summary><b>Project structure</b></summary>
+
+```text
+Warden/
+  core/            # scanner + modules (secrets, dll_hijack, signature, re_exposure,
+                   #   dotnet_checks, java_checks, electron_checks, linux, macos,
+                   #   reputation, archive_extractor, finding_grouping, pe_utils …)
+  desktop/         # PySide6 app (main_window, scan_worker, finding_dialog, settings, theme)
+  report/          # html_export.py
+  rules/           # secrets_patterns.yaml, system_dlls.yaml, packer_signatures.yaml, components.yaml
+  tests/           # test_fixes.py (+ fixtures: .NET / Java vulnerable & safe samples)
+  cli.py · warden.spec · requirements.txt
+```
+Both interfaces call `core.scanner.run_scan()`; module output is normalized into `core.models.Finding` and rendered by `report.html_export`.
+</details>
+
+---
+
+## 🧭 What Warden is — and isn't
+
+| ✅ Warden does (static) | ❌ Warden does not (dynamic / manual) |
+|---|---|
+| Parse PE/ELF/Mach-O, .NET IL, Java bytecode | Run, debug, or hook the target |
+| Unpack installers & scan the real app | Exploit, bypass, or prove exploitability |
+| Flag unsigned/weak-crypto/trust-all/secrets | Intercept live traffic / MITM |
+| Produce a shareable report with PoC steps | Memory/registry diffing, fuzzing, business logic |
+
+It's the **static client-side pass** of a thick-client engagement — fast, repeatable, low-noise — leaving the runtime and logic work to you.
+
+<details>
+<summary><b>Known limitations</b></summary>
+
+- Static-only: it does not prove exploitability.
+- Entropy findings are heuristic and can false-positive.
+- VirusTotal hash lookup is reputation data, not a verdict.
+- Python plugins are trusted code, not sandboxed.
+- Full Authenticode trust/revocation is best confirmed with Windows `signtool verify /pa`.
+- Some Linux/macOS checks need the platform's native tools present.
+- Encrypted SQLite (SQLCipher) can't be inspected.
+- `--incremental` restores cached findings for unchanged files; delete `.warden_cache/` after upgrading rule packs.
+
+</details>
+
+<details>
+<summary><b>Build & test</b></summary>
+
+```bash
+python -m pytest -q tests                 # regression suite
+pyinstaller --noconfirm warden.spec       # → dist/Warden.exe (one file, no console)
+```
+Keep `build/`, `dist/`, `__pycache__/`, `.pytest_cache/`, `.warden_cache/`, venvs, and generated reports out of source control.
+</details>
+
+---
+
+## ⚠️ Authorized use only
+
+> [!CAUTION]
+> **Warden is for authorized security assessments only.**
+>
+> Use it **exclusively** against applications you **own** or have **explicit written permission** to assess. Scanning, reverse-engineering, or extracting software without authorization may violate computer-misuse law, software license terms, and NDAs.
+>
+> You are solely responsible for how you use this tool. The author accepts **no liability** for misuse or for any damage arising from its use. Reports can contain sensitive client data — handle, store, and share them only within the bounds of your engagement.
+>
+> **No authorization? Don't scan it.**
+
+---
+
+<div align="center">
+
+Built & maintained by **[Ankesh Prajapati](https://github.com/Ankesh-Prajapati)**
+🛡️ *Static analysis for people who do the dynamic work themselves.*
+
+</div>
