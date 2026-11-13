@@ -12,6 +12,9 @@ a = Analysis(
         ("assets/logo_report.png", "assets"),
         ("desktop/assets", "desktop/assets"),
     ],
+    # dnfile is imported inside a try/except (optional .NET checks); name it
+    # explicitly so the frozen EXE always bundles it.
+    hiddenimports=["dnfile"],
     excludes=["tkinter", "matplotlib", "numpy", "pandas", "PyQt5", "PyQt6", "IPython", "pytest"],
 )
 pyz = PYZ(a.pure)
