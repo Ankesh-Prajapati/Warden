@@ -75,6 +75,40 @@ def _sevenzip_path() -> str | None:
     return None
 
 
+def _innoextract_path() -> str | None:
+    """`innoextract` on PATH (unpacks Inno Setup installers, which 7-Zip
+    cannot — it only sees the outer PE's sections)."""
+    return shutil.which("innoextract")
+
+
+# Inno Setup stamps this into the installer's embedded data block. Present in
+# both the setup .exe and its uninstaller; a reliable, cheap signature.
+_INNO_MARKER = b"Inno Setup Setup Data"
+_INNO_SCAN_BYTES = 16 * 1024 * 1024  # marker sits in the loader, within a few MB
+
+
+def _is_inno_setup(path: Path) -> bool:
+    """True if the PE is an Inno Setup installer/uninstaller."""
+    try:
+        with open(path, "rb") as f:
+            return _INNO_MARKER in f.read(_INNO_SCAN_BYTES)
+    except OSError:
+        return False
+
+
+def _extract_inno(innoextract: str, archive_path: Path, dest_dir: Path, timeout: int) -> bool:
+    """Unpack an Inno Setup installer's files with innoextract. -e extracts,
+    -d sets the output dir, --progress=0 keeps it quiet, -q silences chatter."""
+    try:
+        proc = subprocess.run(
+            [innoextract, "-e", "-q", "--progress=0", "-d", str(dest_dir), str(archive_path)],
+            capture_output=True, **NO_CONSOLE, text=True, errors="replace", timeout=timeout,
+        )
+        return proc.returncode == 0
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
 def _list_archive(sevenzip: str, archive_path: Path, timeout: int) -> tuple[int, str] | None:
     """(total uncompressed size, archive type) per `7z l -slt`, or None if
     7z can't open it as an archive. The size is checked *before* extracting
@@ -205,8 +239,22 @@ def extract_archive_recursive(
             continue
 
         is_asar = current.suffix.lower() == ".asar"
+        # Inno Setup installers: 7-Zip only sees the outer PE's sections, never
+        # the bundled application. innoextract unpacks them; without it we flag
+        # the coverage gap instead of silently scanning only the wrapper.
+        is_inno = not is_asar and current.suffix.lower() == ".exe" and _is_inno_setup(current)
+        innoextract = _innoextract_path() if is_inno else None
+        if is_inno and innoextract is None:
+            result.warnings.append(
+                f"{current.name} is an Inno Setup installer; its bundled application was NOT unpacked "
+                "(7-Zip cannot read Inno payloads). Install 'innoextract' and re-scan for full coverage."
+            )
+            continue
+
         if is_asar:
             listed, kind = current.stat().st_size, "ASAR"
+        elif is_inno:
+            listed, kind = current.stat().st_size, "INNO"
         else:
             listing = _list_archive(sevenzip, current, timeout_seconds)
             if listing is None:
@@ -224,7 +272,14 @@ def extract_archive_recursive(
             continue
 
         dest.mkdir(parents=True, exist_ok=True)
-        ok = _extract_asar(current, dest) if is_asar else _extract_one(sevenzip, current, dest, timeout_seconds)[0]
+        if is_asar:
+            ok = _extract_asar(current, dest)
+        elif is_inno:
+            ok = _extract_inno(innoextract, current, dest, timeout_seconds)
+            if not ok:
+                result.warnings.append(f"innoextract failed on {current.name}; its payload was not scanned")
+        else:
+            ok = _extract_one(sevenzip, current, dest, timeout_seconds)[0]
         if not ok:
             continue
         if kind == "PE":

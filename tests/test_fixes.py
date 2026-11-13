@@ -398,6 +398,39 @@ def test_java_trust_all_needs_empty_body_not_just_a_trustmanager():
     assert _is_empty_void(b"\xb1") and not _is_empty_void(b"\x2a\xb1")    # return vs aload+return
 
 
+def test_inno_setup_detection_warning_and_routing():
+    from core import archive_extractor as ax
+    if ax._sevenzip_path() is None:
+        return
+    tmp = Path(tempfile.mkdtemp(prefix="warden_test_"))
+    inno = tmp / "Setup.exe"
+    inno.write_bytes(b"MZ" + b"\x00" * 128 + b"Inno Setup Setup Data (6.2.0)" + b"\x00" * 64)
+    assert ax._is_inno_setup(inno)
+    assert not ax._is_inno_setup(Path(sys.executable))  # native PE
+
+    # 1. innoextract absent -> coverage-gap warning, nothing extracted.
+    saved_path, saved_extract = ax._innoextract_path, ax._extract_inno
+    try:
+        ax._innoextract_path = lambda: None
+        r = ax.extract_archive_recursive(inno)
+        assert not r.extracted_files
+        assert any("Inno Setup installer" in w and "innoextract" in w for w in r.warnings), r.warnings
+        ax.cleanup(r)
+
+        # 2. innoextract present -> payload is kept (not deleted as PE sections).
+        def fake_extract(tool, archive, dest, timeout):
+            (Path(dest) / "AppMain.exe").write_bytes(b"MZ payload")
+            return True
+        ax._innoextract_path = lambda: "innoextract"
+        ax._extract_inno = fake_extract
+        r2 = ax.extract_archive_recursive(inno)
+        names = {p.name for p in r2.extracted_files}
+        assert "AppMain.exe" in names, names
+        ax.cleanup(r2)
+    finally:
+        ax._innoextract_path, ax._extract_inno = saved_path, saved_extract
+
+
 if __name__ == "__main__":
     import logging
     logging.disable(logging.CRITICAL)
