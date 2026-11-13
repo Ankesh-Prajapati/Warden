@@ -5,6 +5,7 @@ rich>=13.0
 cryptography>=42.0
 PySide6>=6.7
 yara-python>=4.5; platform_python_implementation == "CPython"
+dnfile>=0.15; platform_python_implementation == "CPython"  # .NET assembly metadata+IL checks
 tomli>=2.0; python_version < "3.11"
 # reputation module (VirusTotal) uses only Python stdlib (urllib, hashlib) — no new dependency needed
 

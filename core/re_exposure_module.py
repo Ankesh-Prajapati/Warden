@@ -28,7 +28,7 @@ import yaml
 
 from core.cache_utils import ScanCache, sha256_file
 from core.rules import component_thresholds
-from core import electron_checks
+from core import dotnet_checks, electron_checks
 from core.fs_walk import find_pe_files
 from core.models import Finding, Severity
 from core.pe_utils import (
@@ -362,7 +362,8 @@ def _packer_findings(pe_path: Path, pe_info: PEInfo, signatures: dict) -> list[F
 # ---------------------------------------------------------------------------
 
 def _is_dotnet_assembly(pe_path: Path, pe_info: PEInfo) -> bool:
-    return "mscoree.dll" in [d.lower() for d in pe_info.imported_dlls]
+    # CLR directory covers .NET Core/5+; mscoree import covers edge cases.
+    return pe_info.is_dotnet or "mscoree.dll" in [d.lower() for d in pe_info.imported_dlls]
 
 
 def _dotnet_obfuscation_finding(
@@ -904,6 +905,10 @@ def run(
                 *_yara_findings(pe_path, yara_rules),
                 *(electron_checks.check_runtime(pe_path, data, get_security_directory_bytes(pe_path) is not None)
                   if electron_checks.FUSE_SENTINEL in data else []),
+                # Managed-code checks (dnfile): skip satellite resource assemblies,
+                # which hold only localized strings and no code.
+                *(dotnet_checks.check_assembly(pe_path)
+                  if pe_info.is_dotnet and not pe_path.name.lower().endswith(".resources.dll") else []),
             ]
             file_findings = [f for f in file_findings if f is not None]
             _add(file_findings)

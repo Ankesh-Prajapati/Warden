@@ -44,6 +44,7 @@ class PEInfo:
     sections: list[dict] = field(default_factory=list)  # name, entropy, size
     pdb_path: Optional[str] = None
     cert_directory_present: bool = False
+    is_dotnet: bool = False
     manifest_xml: Optional[str] = None
     dependency_edges: list[tuple[str, str]] = field(default_factory=list)
     error: Optional[str] = None
@@ -255,6 +256,15 @@ def parse_pe(path: Path, with_section_entropy: bool = False) -> PEInfo:
 
     info.is_valid_pe = True
     info.is_dll = bool(pe.FILE_HEADER.Characteristics & 0x2000)  # IMAGE_FILE_DLL
+    # CLR runtime header (DATA_DIRECTORY[14]) — reliable for all .NET,
+    # including .NET Core/5+ which no longer import mscoree.dll.
+    try:
+        clr = pe.OPTIONAL_HEADER.DATA_DIRECTORY[
+            pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR"]
+        ]
+        info.is_dotnet = bool(clr.VirtualAddress and clr.Size)
+    except (AttributeError, IndexError, KeyError):
+        info.is_dotnet = False
 
     # --- Imports ---
     if hasattr(pe, "DIRECTORY_ENTRY_IMPORT"):

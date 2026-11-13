@@ -320,6 +320,55 @@ def test_inventory_excluded_from_counts():
     assert sum(data["summary"]["info_unique"].values()) == sum(f["severity"] == "Info" for f in data["findings"])
 
 
+_DOTNET_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "dotnet"
+
+
+def test_dotnet_vulnerable_assembly_detected():
+    import pytest  # noqa
+    from core import dotnet_checks
+    if not dotnet_checks._HAVE_DNFILE:
+        return
+    for exe in ("VulnClient.exe", "VulnRelease.exe"):  # debug + release IL forms
+        rules = {f.rule_id for f in dotnet_checks.check_assembly(_DOTNET_FIXTURES / exe)}
+        assert {"dotnet-insecure-deserialization", "dotnet-weak-crypto", "dotnet-remoting-server",
+                "dotnet-tls-validation-disabled", "dotnet-weak-tls-protocol"} <= rules, (exe, rules)
+        tls = next(f for f in dotnet_checks.check_assembly(_DOTNET_FIXTURES / exe)
+                   if f.rule_id == "dotnet-tls-validation-disabled")
+        assert tls.severity == Severity.HIGH and "cwe-295" in tls.tags
+
+
+def test_dotnet_safe_assembly_no_high_findings():
+    from core import dotnet_checks
+    if not dotnet_checks._HAVE_DNFILE:
+        return
+    findings = dotnet_checks.check_assembly(_DOTNET_FIXTURES / "SafeClient.exe")
+    # Safe: Aes, DataContractJson, Tls12, a real cert validator. Only the
+    # Low "review" note is acceptable; nothing Medium or High.
+    assert not [f for f in findings if f.severity in (Severity.HIGH, Severity.MEDIUM)], \
+        [(f.severity.value, f.rule_id) for f in findings]
+    assert all(f.rule_id == "dotnet-custom-cert-validation" for f in findings), \
+        [f.rule_id for f in findings]
+
+
+def test_dotnet_trust_all_requires_wiring_not_just_true_getter():
+    # SafeClient has always-true property-style methods but no trust-all
+    # wiring, so the HIGH trust-all rule must not fire on it.
+    from core import dotnet_checks
+    if not dotnet_checks._HAVE_DNFILE:
+        return
+    rules = {f.rule_id for f in dotnet_checks.check_assembly(_DOTNET_FIXTURES / "SafeClient.exe")}
+    assert "dotnet-tls-validation-disabled" not in rules
+
+
+def test_clr_directory_detects_modern_dotnet():
+    from core.pe_utils import parse_pe
+    info = parse_pe(_DOTNET_FIXTURES / "VulnClient.exe")
+    assert info.is_valid_pe and info.is_dotnet
+    # A native PE (the Python launcher) must not be flagged managed.
+    native = parse_pe(Path(sys.executable))
+    assert native.is_valid_pe and not native.is_dotnet
+
+
 if __name__ == "__main__":
     import logging
     logging.disable(logging.CRITICAL)
