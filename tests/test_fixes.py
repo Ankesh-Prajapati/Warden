@@ -369,6 +369,35 @@ def test_clr_directory_detects_modern_dotnet():
     assert native.is_valid_pe and not native.is_dotnet
 
 
+_JAVA_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "java"
+
+
+def test_java_vulnerable_jar_detected():
+    from core.java_checks import scan_tree
+    jar = _JAVA_FIXTURES / "VulnApp.jar"
+    rules = {f.rule_id for f in scan_tree(jar.parent, single_file=jar)}
+    assert {"java-tls-trustmanager-trust-all", "java-tls-hostname-verifier-disabled",
+            "java-weak-cipher", "java-weak-hash", "java-insecure-deserialization",
+            "java-hardcoded-db-credentials"} <= rules, rules
+    tm = next(f for f in scan_tree(jar.parent, single_file=jar) if f.rule_id == "java-tls-trustmanager-trust-all")
+    assert tm.severity == Severity.HIGH and "cwe-295" in tm.tags
+
+
+def test_java_safe_class_clean():
+    from core.java_checks import check_class
+    data = (_JAVA_FIXTURES / "SafeJava.class").read_bytes()
+    # AES/GCM, SHA-256, parameterized SQL, no custom trust manager -> nothing.
+    assert check_class(data, "SafeJava.class") == []
+
+
+def test_java_trust_all_needs_empty_body_not_just_a_trustmanager():
+    # SafeJava references no TrustManager; a verify()-shaped method returning
+    # false must not be flagged. Guard against the returns-true matcher.
+    from core.java_checks import _returns_true, _is_empty_void
+    assert _returns_true(b"\x04\xac") and not _returns_true(b"\x03\xac")  # true vs false
+    assert _is_empty_void(b"\xb1") and not _is_empty_void(b"\x2a\xb1")    # return vs aload+return
+
+
 if __name__ == "__main__":
     import logging
     logging.disable(logging.CRITICAL)

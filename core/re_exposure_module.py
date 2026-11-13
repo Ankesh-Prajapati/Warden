@@ -28,7 +28,7 @@ import yaml
 
 from core.cache_utils import ScanCache, sha256_file
 from core.rules import component_thresholds
-from core import dotnet_checks, electron_checks
+from core import dotnet_checks, electron_checks, java_checks
 from core.fs_walk import find_pe_files
 from core.models import Finding, Severity
 from core.pe_utils import (
@@ -925,4 +925,12 @@ def run(
         except Exception as e:
             if error_callback:
                 error_callback(f"re_exposure: Electron source checks failed: {e}")
+
+    # Managed Java bytecode (.jar/.war/.class) — not PE files, so the loop
+    # above never sees them. scan_tree is a no-op for a non-Java single_file.
+    try:
+        _add(java_checks.scan_tree(target_dir, single_file=single_file))
+    except Exception as e:
+        if error_callback:
+            error_callback(f"re_exposure: Java bytecode checks failed: {e}")
     return all_findings
