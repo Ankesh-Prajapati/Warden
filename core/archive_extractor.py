@@ -1,17 +1,17 @@
 """
-Installer/archive extraction — unpacks the bundled payload of installers
+Installer/archive extraction - unpacks the bundled payload of installers
 (NSIS, InnoSetup, MSI, self-extracting archives, plain ZIP/CAB/7z) so
 their *contents* get scanned, not just the outer wrapper executable.
 
 Real motivating example found during development: a signed, legitimate
 installer's PE resources included a Microsoft Cabinet archive containing
-five real DLLs (an updater, an activation helper, a UI framework, etc.) —
+five real DLLs (an updater, an activation helper, a UI framework, etc.) -
 all completely unscanned by every other module, since none of them look
 inside PE resource data for a nested archive format.
 
 Uses the system `7z` binary (7-Zip / p7zip-full) since it has built-in
 support for reading the PE resource layout of installer wrappers and a
-wide range of archive formats through one consistent interface — this is
+wide range of archive formats through one consistent interface - this is
 the same approach forensic/RE tooling generally uses for this problem
 rather than hand-rolling a parser per installer framework. If `7z` isn't
 on PATH, extraction is skipped entirely (never a hard failure) and the
@@ -23,7 +23,7 @@ Safety:
   archive listing before extraction and re-checked on disk afterwards.
 - Path-escape guard: refuses any extracted member that would land outside
   the destination directory, even though 7z itself already guards against
-  this — defense in depth costs nothing here.
+  this - defense in depth costs nothing here.
 - Bounded overall time via a subprocess timeout per extraction.
 """
 from __future__ import annotations
@@ -40,7 +40,7 @@ from pathlib import Path
 from core import NO_CONSOLE
 
 # Extensions worth *attempting* extraction on. `.exe`/`.dll` are included
-# because that's exactly the phantom-payload case above — an ordinary PE
+# because that's exactly the phantom-payload case above - an ordinary PE
 # can still contain a nested Cabinet/NSIS/InnoSetup/7z payload in its
 # resources even though the file itself is "just an executable".
 ARCHIVE_EXTENSIONS = {
@@ -77,7 +77,7 @@ def _sevenzip_path() -> str | None:
 
 def _innoextract_path() -> str | None:
     """`innoextract` on PATH (unpacks Inno Setup installers, which 7-Zip
-    cannot — it only sees the outer PE's sections)."""
+    cannot - it only sees the outer PE's sections)."""
     return shutil.which("innoextract")
 
 
@@ -128,7 +128,7 @@ def _list_archive(sevenzip: str, archive_path: Path, timeout: int) -> tuple[int,
 
 
 def _safe_join(base: Path, *parts: str) -> Path:
-    """Resolve a path under `base` and refuse anything that escapes it —
+    """Resolve a path under `base` and refuse anything that escapes it -
     defense in depth against a maliciously crafted archive, even though
     7z itself already guards against path traversal on extraction."""
     candidate = (base / Path(*parts)).resolve()
@@ -218,7 +218,7 @@ def extract_archive_recursive(
 
     sevenzip = _sevenzip_path()
     if sevenzip is None:
-        result.warnings.append("7z not found (PATH or Program Files\\7-Zip) — archive/installer extraction skipped")
+        result.warnings.append("7z not found (PATH or Program Files\\7-Zip) - archive/installer extraction skipped")
         return result
 
     root = Path(tempfile.mkdtemp(prefix="warden_extract_"))
@@ -258,7 +258,7 @@ def extract_archive_recursive(
         else:
             listing = _list_archive(sevenzip, current, timeout_seconds)
             if listing is None:
-                # Not every .exe/.dll IS an archive — 7z failing on a plain
+                # Not every .exe/.dll IS an archive - 7z failing on a plain
                 # PE with no embedded archive payload is the expected common
                 # case, not an error worth surfacing.
                 continue
@@ -290,7 +290,7 @@ def extract_archive_recursive(
         if seen_total_bytes > max_total_bytes:
             result.truncated = True
             result.warnings.append(
-                f"Extracted content exceeded {max_total_bytes // (1024*1024)} MB cap — "
+                f"Extracted content exceeded {max_total_bytes // (1024*1024)} MB cap - "
                 f"stopped extracting further nested archives"
             )
             break
@@ -306,7 +306,7 @@ def extract_archive_recursive(
             result.extracted_files.append(extracted)
             # Deliberately NOT gated on file extension: files extracted
             # from a PE's resource section commonly have no extension at
-            # all (e.g. "2000", "3000" — the raw RCDATA resource ID) even
+            # all (e.g. "2000", "3000" - the raw RCDATA resource ID) even
             # though the content itself is a real nested archive (this is
             # exactly the Cabinet-archive-in-a-resource case that
             # motivated this feature). 7z fails fast and harmlessly on

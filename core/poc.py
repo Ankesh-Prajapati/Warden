@@ -89,7 +89,7 @@ def default_poc(f: Finding) -> str:
         steps.append("2. Reproduce independently:\n" + "\n".join(_indent(c) for c in commands))
     else:
         steps.append("2. Open the file at the location above and confirm the evidence below is present.")
-    if items:  # one per line — the evidence string is the same list comma-joined
+    if items:  # one per line - the evidence string is the same list comma-joined
         evidence_block = f"3. Evidence ({len(items)} item(s)):\n" + "\n".join(_indent(i) for i in items)
     else:
         evidence_block = f"3. Evidence:\n{_indent(f.evidence)}"

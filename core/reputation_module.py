@@ -1,9 +1,9 @@
 """
-Module: reputation — cross-checks scanned binaries against VirusTotal.
+Module: reputation - cross-checks scanned binaries against VirusTotal.
 
 Opt-in only: requires an explicit API key. Without one, this module simply
 produces no findings and logs a single informational note rather than
-failing the scan — a missing/unset VT key is a normal, expected state, not
+failing the scan - a missing/unset VT key is a normal, expected state, not
 an error condition.
 
 Hash lookup only by default (see core/virustotal_utils.py for why). File
@@ -24,7 +24,7 @@ MODULE_NAME = "reputation"
 # accidentally burn through a whole day's free-tier VT quota (500/day) in
 # one run, or make a large scan take unexpectedly long purely on VT
 # rate-limit waits. Free tier is 1 lookup per ~15s, so even this reduced
-# default (15) has a ~4 minute floor — deliberately kept low since this is
+# default (15) has a ~4 minute floor - deliberately kept low since this is
 # the value used unless a caller explicitly raises it (e.g. a paid-tier
 # key that can afford a bigger number).
 DEFAULT_MAX_LOOKUPS = 15
@@ -60,7 +60,7 @@ def run(
     if not api_key or not api_key.strip():
         if error_callback:
             error_callback(
-                "reputation: no VirusTotal API key configured — skipping reputation checks. "
+                "reputation: no VirusTotal API key configured - skipping reputation checks. "
                 "This is expected if you haven't set one up; not a failure."
             )
         return findings
@@ -84,7 +84,7 @@ def run(
     if not binaries:
         if error_callback:
             error_callback(
-                "reputation: no .exe/.dll/.elf/Mach-O binaries found under this target — "
+                "reputation: no .exe/.dll/.elf/Mach-O binaries found under this target - "
                 "nothing for VirusTotal to check."
             )
         return findings
@@ -102,7 +102,7 @@ def run(
         eta_minutes, eta_secs = divmod(int(eta_seconds), 60)
         eta_text = f"~{eta_minutes}m {eta_secs}s" if eta_minutes else f"~{eta_secs}s"
         error_callback(
-            f"reputation: checking {len(binaries)} binary/binaries against VirusTotal — "
+            f"reputation: checking {len(binaries)} binary/binaries against VirusTotal - "
             f"estimated {eta_text} at this API tier's rate limit ({client.min_interval_seconds:.0f}s "
             f"between lookups). This runs after all other selected modules finish."
         )
@@ -151,7 +151,7 @@ def run(
                     evidence=f"sha256={sha256}",
                     description=(
                         "This binary's hash has no record in VirusTotal's database. This is "
-                        "neutral, not reassuring — it just means no scanner has analyzed this "
+                        "neutral, not reassuring - it just means no scanner has analyzed this "
                         "exact file before (common for freshly built/internal software)."
                     ),
                     confidence="High",
@@ -181,7 +181,7 @@ def run(
                 ),
                 remediation=(
                     "Confirm this isn't a known false positive for a legitimate packer/installer "
-                    "before treating this as conclusive — review the VirusTotal report directly, "
+                    "before treating this as conclusive - review the VirusTotal report directly, "
                     "then quarantine and investigate the build/distribution pipeline that produced "
                     "this binary if the detections hold up."
                 ),
@@ -207,7 +207,7 @@ def run(
 
     if error_callback:
         error_callback(
-            f"reputation: done — {checked} binary/binaries checked via VirusTotal, "
+            f"reputation: done - {checked} binary/binaries checked via VirusTotal, "
             f"{flagged} flagged, {unknown} unknown to VT"
             + (f", {lookup_failed} lookup(s) failed" if lookup_failed else "") + "."
         )

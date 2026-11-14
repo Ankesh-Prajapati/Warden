@@ -32,7 +32,7 @@ def setup_logging(
     """
     Configure the root "warden" logger once per process.
 
-    Safe to call multiple times — only the first call takes effect, so
+    Safe to call multiple times - only the first call takes effect, so
     every entry point can call it unconditionally at startup without
     worrying about double-attaching handlers.
 

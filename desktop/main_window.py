@@ -62,7 +62,7 @@ def _application_root() -> Path:
 
 def _reports_dir() -> Path:
     """Reports next to the app when writable (source checkout / portable
-    install), else per-user — an MSI install under Program Files is
+    install), else per-user - an MSI install under Program Files is
     read-only for standard users and used to crash the app on startup."""
     for candidate in (_application_root() / "reports", Path.home() / ".warden" / "reports"):
         try:
@@ -110,7 +110,7 @@ def _app_name(target_path: str) -> str:
 
 def _plain_tooltip(text: str) -> str:
     """Qt renders tooltips as rich text when they *look* like HTML, and
-    evidence comes straight from the scanned (untrusted) target — escape
+    evidence comes straight from the scanned (untrusted) target - escape
     it, same as the log pane does."""
     return "<qt>" + html.escape(text).replace("\n", "<br>") + "</qt>"
 
@@ -118,7 +118,7 @@ def _plain_tooltip(text: str) -> str:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Warden — Static Security Analysis")
+        self.setWindowTitle("Warden - Static Security Analysis")
         self.resize(1180, 820)
         self.setMinimumSize(860, 600)
 
@@ -310,7 +310,7 @@ class MainWindow(QMainWindow):
             "<b>Warden</b><br>"
             "Static security analysis for thick-client applications.<br><br>"
             "Warden performs offline, static-only security assessment of Windows, "
-            "Linux, and macOS desktop applications — hardcoded secrets and config "
+            "Linux, and macOS desktop applications - hardcoded secrets and config "
             "exposure, DLL hijacking risk, Authenticode signature/integrity checks, "
             "reverse-engineering/anti-tamper exposure, and optional VirusTotal "
             "reputation lookups. No dynamic execution or exploitation tooling is "
@@ -358,7 +358,7 @@ class MainWindow(QMainWindow):
         self._splitter.setStretchFactor(0, 0)
         self._splitter.setStretchFactor(1, 1)
         # setSizes() before the window has real on-screen geometry is
-        # unreliable in Qt — the splitter negotiates against a 0×0 (or
+        # unreliable in Qt - the splitter negotiates against a 0×0 (or
         # otherwise not-yet-final) size and can end up narrower than
         # intended, which showed up as the left panel rendering half-cut
         # off on first launch until something forced a relayout. Deferring
@@ -381,7 +381,7 @@ class MainWindow(QMainWindow):
         scroll.setMinimumWidth(340)
         scroll.setMaximumWidth(440)
         # The config panel (target/modules/options/VirusTotal/run controls)
-        # is consistently taller than a typical window — without this, the
+        # is consistently taller than a typical window - without this, the
         # scrollbar only appears once content is already cut off and is
         # easy to miss entirely, making whole sections (e.g. VirusTotal)
         # look like they don't exist rather than "scroll down for more."
@@ -475,7 +475,7 @@ class MainWindow(QMainWindow):
         og_layout.addWidget(self.opt_osslsigncode)
         og_layout.addWidget(self.opt_include_inventory)
 
-        services_label = QLabel("Services file (optional — sc query / wmic output):")
+        services_label = QLabel("Services file (optional - sc query / wmic output):")
         services_label.setObjectName("subheading")
         services_label.setWordWrap(True)
         og_layout.addWidget(services_label)
@@ -492,7 +492,7 @@ class MainWindow(QMainWindow):
 
         vt_desc = QLabel(
             "Cross-checks each binary's SHA-256 hash against VirusTotal. Only the hash is sent "
-            "by default — the binary itself never leaves this machine unless upload is enabled below."
+            "by default - the binary itself never leaves this machine unless upload is enabled below."
         )
         vt_desc.setObjectName("subheading")
         vt_desc.setWordWrap(True)
@@ -521,7 +521,7 @@ class MainWindow(QMainWindow):
         vt_layout.addWidget(self.vt_eta_label)
         self._update_vt_eta_label()
 
-        vt_key_label = QLabel("VirusTotal API key (stored via OS settings storage — plaintext, "
+        vt_key_label = QLabel("VirusTotal API key (stored via OS settings storage - plaintext, "
                                "same as other desktop apps' saved credentials):")
         vt_key_label.setObjectName("subheading")
         vt_key_label.setWordWrap(True)
@@ -591,7 +591,7 @@ class MainWindow(QMainWindow):
 
         # -- Run controls: pinned outside the scroll area -------------------
         # These are the primary action controls (Run/Cancel/Report/Export +
-        # progress) — they must always be visible regardless of how far the
+        # progress) - they must always be visible regardless of how far the
         # config sections above are scrolled, rather than living at the
         # bottom of the same scrollable content where they could end up
         # just as hidden as the VirusTotal section was.
@@ -626,7 +626,7 @@ class MainWindow(QMainWindow):
 
         progress_row = QHBoxLayout()
         self.progress_bar = QProgressBar()
-        # Starts static/empty (matches the post-scan "done" state) — it
+        # Starts static/empty (matches the post-scan "done" state) - it
         # only switches to indeterminate mode (range 0,0) once a scan
         # actually starts, in _start_scan below. Starting indeterminate
         # here made the bar animate continuously before Run Scan was even
@@ -789,7 +789,7 @@ class MainWindow(QMainWindow):
         for module_id, cb in self._module_checks.items():
             cb.setChecked(module_id in selected)
         if self.settings.vt_api_key:
-            self.vt_api_key_input.setPlaceholderText("Saved key in use — paste a new one to replace it")
+            self.vt_api_key_input.setPlaceholderText("Saved key in use - paste a new one to replace it")
         self.opt_vt_include_clean.setChecked(self.settings.vt_include_clean)
         self.vt_max_lookups_input.setValue(self.settings.vt_max_lookups)
         self._update_vt_eta_label()
@@ -803,13 +803,13 @@ class MainWindow(QMainWindow):
         self.settings.include_inventory = self.opt_include_inventory.isChecked()
         self.settings.selected_modules = [m for m, cb in self._module_checks.items() if cb.isChecked()]
         # Only overwrite the saved API key if the analyst actually typed a
-        # new one this session — otherwise leave the previously saved key
+        # new one this session - otherwise leave the previously saved key
         # (which we deliberately never echo back into the field) intact.
         typed_key = self.vt_api_key_input.text().strip()
         if typed_key:
             self.settings.vt_api_key = typed_key
             self.vt_api_key_input.clear()
-            self.vt_api_key_input.setPlaceholderText("Saved key in use — paste a new one to replace it")
+            self.vt_api_key_input.setPlaceholderText("Saved key in use - paste a new one to replace it")
         self.settings.vt_include_clean = self.opt_vt_include_clean.isChecked()
         self.settings.vt_max_lookups = self.vt_max_lookups_input.value()
 
@@ -853,9 +853,9 @@ class MainWindow(QMainWindow):
             self.target_hint.setText("⚠ This path does not exist.")
             return
         if p.is_file() or looks_like_file:
-            self.target_hint.setText(f"Single-file scan — only {p.name} is analyzed.")
+            self.target_hint.setText(f"Single-file scan - only {p.name} is analyzed.")
         else:
-            self.target_hint.setText("Folder scan — every file under this path is analyzed.")
+            self.target_hint.setText("Folder scan - every file under this path is analyzed.")
 
     # ------------------------------------------------------------------
     # Scan lifecycle
@@ -930,7 +930,7 @@ class MainWindow(QMainWindow):
             self._set_results_state("failed", detail=str(e))
 
     def _update_vt_eta_label(self) -> None:
-        # Free-tier VirusTotal is 1 lookup per ~15s — shown as a worst-case
+        # Free-tier VirusTotal is 1 lookup per ~15s - shown as a worst-case
         # estimate right next to the control that determines it, so this
         # time cost is visible before Run Scan is clicked, not discovered
         # 15+ minutes into a scan that already looked "done."
@@ -941,13 +941,13 @@ class MainWindow(QMainWindow):
         self.vt_eta_label.setText(
             f"Worst case on the free API tier: up to {eta} added to the scan, checking {n} "
             f"binaries at ~15s each. Runs after all other selected modules finish. A paid "
-            f"tier lifts the per-lookup wait — this estimate is free-tier-conservative."
+            f"tier lifts the per-lookup wait - this estimate is free-tier-conservative."
         )
 
     def _test_vt_key(self) -> None:
         key = self.vt_api_key_input.text().strip() or self.settings.vt_api_key
         if not key:
-            self.vt_test_status.setText("No API key to test — paste one first.")
+            self.vt_test_status.setText("No API key to test - paste one first.")
             self.vt_test_status.setStyleSheet(f"color: {theme.get_palette()['AMBER']};")
             return
 
@@ -1015,7 +1015,7 @@ class MainWindow(QMainWindow):
         ts = datetime.now().strftime("%H:%M:%S")
         # append() renders its argument as rich text, and log messages
         # routinely embed attacker-controlled data (filenames, paths, raw
-        # exception text) pulled straight from the scanned target — escape
+        # exception text) pulled straight from the scanned target - escape
         # it the same way the HTML report does, so a crafted filename like
         # `<img src=...>.exe` can't inject markup into the log pane.
         safe_message = html.escape(message)
@@ -1241,7 +1241,7 @@ class MainWindow(QMainWindow):
                     evidence_details.append(f"Context: {context}")
             if len(occurrences) > _TOOLTIP_MAX_OCCURRENCES:
                 evidence_details.append(
-                    f"+{len(occurrences) - _TOOLTIP_MAX_OCCURRENCES} more — double-click for details"
+                    f"+{len(occurrences) - _TOOLTIP_MAX_OCCURRENCES} more - double-click for details"
                 )
             evidence_item.setToolTip(_plain_tooltip("\n\n".join(evidence_details)))
             title_item.setToolTip(_plain_tooltip(f["title"]))

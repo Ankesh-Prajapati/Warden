@@ -366,7 +366,7 @@ def _esc(value) -> str:
 
 def _format_timestamp(value: str | None) -> str:
     if not value:
-        return "—"
+        return "-"
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
@@ -380,7 +380,7 @@ def _duration(start: str | None, end: str | None) -> str:
     try:
         seconds = (datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds()
     except (TypeError, ValueError):
-        return "—"
+        return "-"
     minutes, secs = divmod(int(round(seconds)), 60)
     return f"{minutes}m {secs:02d}s" if minutes else f"{seconds:.1f}s"
 
@@ -445,7 +445,7 @@ def _render_header(meta, report_data: dict, findings: list[dict]) -> str:
     m = report_data["metadata"]
     modules = ", ".join(
         f"{_module_label(name)} ({count})" for name, count in sorted(meta.module_execution_counts.items())
-    ) or "—"
+    ) or "-"
     instances = sum(len(f.get("occurrences") or []) for f in findings)
     rows = [
         ("Target", f'<dd class="mono">{_esc(target)}</dd>', False),
@@ -634,11 +634,11 @@ def _render_finding(f: dict) -> str:
   <summary><span class="id">{_esc(f['_id'])}</span>{_sev(f['severity'])}<span class="ftitle">{_esc(f['title'])}</span><span class="affected">{affected} affected</span></summary>
   <div class="fbody">
     <dl class="attrs">{attrs_html}</dl>
-    <div class="block"><h3>Description</h3><p>{_esc(f.get('description') or '—')}</p></div>
+    <div class="block"><h3>Description</h3><p>{_esc(f.get('description') or '-')}</p></div>
     <div class="block"><h3>Evidence {_copy_btn(evidence)}</h3>{_code(evidence)}</div>
     <div class="block"><h3>Affected locations</h3>{occ_html}</div>
     {context_html}
-    <div class="block"><h3>Remediation</h3><p>{_esc(f.get('remediation') or '—')}</p></div>
+    <div class="block"><h3>Remediation</h3><p>{_esc(f.get('remediation') or '-')}</p></div>
     {poc_html}
     {detail_html}
     <div class="tags">{tags_html}</div>

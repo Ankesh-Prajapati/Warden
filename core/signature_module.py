@@ -1,5 +1,5 @@
 """
-Module 3 — Signature / Integrity Check.
+Module 3 - Signature / Integrity Check.
 
 Covers, per the project spec:
   - Authenticode signature presence check on every .exe/.dll
@@ -63,7 +63,7 @@ TRUST_VERIFY_APIS = {
 # DER-encoded OIDs of the two Authenticode timestamp forms carried in the
 # signer's unsigned attributes: PKCS#9 countersignature (1.2.840.113549.1.9.6)
 # and Microsoft's RFC 3161 timestamp token (1.3.6.1.4.1.311.3.3.1).
-# ponytail: byte search, not a full SignerInfo parse — an exact OID match
+# ponytail: byte search, not a full SignerInfo parse - an exact OID match
 # inside a PKCS#7 blob is unambiguous enough; parse ASN.1 if this ever misfires.
 _TIMESTAMP_OID_DER = (
     bytes.fromhex("06092A864886F70D010906"),
@@ -107,7 +107,7 @@ class BinarySignatureInfo:
 
 def _pick_leaf_index(certs: list[CertSummary]) -> Optional[int]:
     """
-    The certificate set in a PKCS#7 SignedData blob is unordered — on real
+    The certificate set in a PKCS#7 SignedData blob is unordered - on real
     signed binaries (git.exe, python.exe) the first entry is a root CA. Pick
     the actual signer: a non-CA, non-timestamp cert, preferring codeSigning
     EKU and a cert that did not issue any other cert in the set.
@@ -226,9 +226,9 @@ def run_osslsigncode_verify(pe_path: Path) -> tuple[Optional[bool], Optional[str
       - verified is None if the tool isn't installed (caller falls back to
         structural parsing only).
       - digest_mismatch is True only when the file's calculated digest does
-        not match the digest recorded in the signature — i.e. real evidence
+        not match the digest recorded in the signature - i.e. real evidence
         of tampering/modification after signing. Chain-of-trust failures
-        (self-signed, expired, untrusted root — already surfaced as their
+        (self-signed, expired, untrusted root - already surfaced as their
         own structural findings) do NOT set this flag, to avoid double-
         counting the same self-signed cert as both "self-signed" and a
         Critical "verification failed" finding.
@@ -264,7 +264,7 @@ _TRUST_E_NOSIGNATURE = 0x800B0100
 
 def run_winverifytrust(pe_path: Path) -> tuple[Optional[bool], Optional[str], bool]:
     """
-    Windows-native Authenticode verification via WinVerifyTrust — same
+    Windows-native Authenticode verification via WinVerifyTrust - same
     return shape as run_osslsigncode_verify. Offline: revocation checks off
     and URL retrieval limited to cache, so it never blocks on the network.
     TRUST_E_BAD_DIGEST is the "file modified after signing" result.
@@ -498,7 +498,7 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
                     "embedded signature does not validate. This can mean the "
                     "file was modified after signing, the signature is "
                     "corrupt, or the certificate chain does not resolve to a "
-                    "trusted root — all of which undermine the integrity "
+                    "trusted root - all of which undermine the integrity "
                     "guarantee the signature is supposed to provide."
                 ),
                 remediation=(
@@ -513,7 +513,7 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
                     f"1. Reproduce the digest mismatch directly:\n"
                     f"     osslsigncode verify \"{path}\"\n"
                     f"   Compare the 'Current message digest' against the "
-                    f"'Calculated message digest' in the output — a mismatch means "
+                    f"'Calculated message digest' in the output - a mismatch means "
                     f"the file's actual content hash no longer matches the hash "
                     f"that was signed.\n\n"
                     f"2. Cross-check on Windows for a second, independent data point:\n"
@@ -525,7 +525,7 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
                     f"     Windows: fc /b original.exe \"{path}\"\n"
                     f"     Linux:   cmp -l original.exe \"{path}\" | head\n\n"
                     f"4. Document the finding with the full osslsigncode output "
-                    f"(see JSON export) as evidence — this is strong evidence of "
+                    f"(see JSON export) as evidence - this is strong evidence of "
                     f"post-signing modification (supply-chain tampering, a packer/"
                     f"resource-editing step after signing, or malicious injection)."
                 ),
@@ -533,7 +533,7 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
         )
 
     # Only the actual signing certificate is checked for signer-related
-    # issues — root/intermediate CAs and timestamp certs are not the
+    # issues - root/intermediate CAs and timestamp certs are not the
     # application's problem.
     leaf = sig_info.leaf
     if leaf is not None:
@@ -544,7 +544,7 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
                     Finding(
                         module="signature",
                         rule_id="expired-signing-certificate-timestamped",
-                        title=f"Expired code-signing certificate with timestamp — {leaf.subject_cn}",
+                        title=f"Expired code-signing certificate with timestamp - {leaf.subject_cn}",
                         severity=Severity.INFO,
                         file_path=path,
                         evidence=f"Certificate valid until {leaf.not_valid_after}",
@@ -576,7 +576,7 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
                     Finding(
                         module="signature",
                         rule_id="expired-signing-certificate",
-                        title=f"Expired code-signing certificate — {leaf.subject_cn}",
+                        title=f"Expired code-signing certificate - {leaf.subject_cn}",
                         severity=Severity.HIGH,
                         file_path=path,
                         evidence=f"Certificate valid until {leaf.not_valid_after}",
@@ -611,7 +611,7 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
                 Finding(
                     module="signature",
                     rule_id="self-signed-certificate",
-                    title=f"Self-signed code-signing certificate — {leaf.subject_cn}",
+                    title=f"Self-signed code-signing certificate - {leaf.subject_cn}",
                     severity=Severity.MEDIUM,
                     file_path=path,
                     evidence=f"Subject and issuer both '{leaf.subject_cn}'",
@@ -653,7 +653,7 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
                 Finding(
                     module="signature",
                     rule_id="weak-signature-algorithm",
-                    title=f"Weak signature hash algorithm ({leaf.signature_hash_algorithm}) — {leaf.subject_cn}",
+                    title=f"Weak signature hash algorithm ({leaf.signature_hash_algorithm}) - {leaf.subject_cn}",
                     severity=Severity.HIGH,
                     file_path=path,
                     evidence=f"Certificate signed using {leaf.signature_hash_algorithm}",
@@ -682,7 +682,7 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
                         f"     Get-AuthenticodeSignature -FilePath \"{path}\" | "
                         f"Select Status, StatusMessage\n\n"
                         f"3. Document both the raw algorithm identifier ({leaf.signature_hash_algorithm}) "
-                        f"and the observed OS trust outcome as evidence — this "
+                        f"and the observed OS trust outcome as evidence - this "
                         f"combination demonstrates concrete impact rather than a "
                         f"theoretical cryptographic weakness."
                     ),
@@ -694,7 +694,7 @@ def _findings_for_binary(sig_info: BinarySignatureInfo, use_osslsigncode: bool) 
 
 def _publisher_consistency_findings(all_sig_info: list[BinarySignatureInfo]) -> list[Finding]:
     """Cross-binary check: do all signed binaries in this app share a publisher?"""
-    # Signer (leaf) certificates only — CA/intermediate/timestamp certs in
+    # Signer (leaf) certificates only - CA/intermediate/timestamp certs in
     # each chain are not "publishers" and made this fire on almost any folder.
     publisher_to_files: dict[str, list[str]] = {}
     for info in all_sig_info:
@@ -706,7 +706,7 @@ def _publisher_consistency_findings(all_sig_info: list[BinarySignatureInfo]) -> 
 
     findings: list[Finding] = []
     summary_lines = "; ".join(f"{pub}: {len(files)} file(s)" for pub, files in publisher_to_files.items())
-    # Anchor the finding on a file signed by the least-common publisher —
+    # Anchor the finding on a file signed by the least-common publisher -
     # the most likely odd one out.
     minority_files = min(publisher_to_files.values(), key=len)
     findings.append(
@@ -722,7 +722,7 @@ def _publisher_consistency_findings(all_sig_info: list[BinarySignatureInfo]) -> 
                 "Binaries within this application are signed by more than "
                 "one distinct publisher/subject. This can be legitimate "
                 "(bundled third-party redistributables) but can also be a "
-                "supply-chain inconsistency signal — e.g. a component "
+                "supply-chain inconsistency signal - e.g. a component "
                 "replaced or injected after the original release build."
             ),
             remediation=(
@@ -848,7 +848,7 @@ def run(
 ) -> list[Finding]:
     """
     Entry point for Module 3. Statically analyzes Authenticode signatures
-    across every PE file under target_dir, or — if `single_file` is given —
+    across every PE file under target_dir, or - if `single_file` is given -
     just that one PE file.
     """
     target_dir = Path(target_dir)
@@ -884,7 +884,7 @@ def run(
     # binaries; skip in single-file scope since there's nothing to compare.
     unverified = [i.path for i in all_sig_info if i.is_signed and i.osslsigncode_verified is None]
     if unverified:
-        # Structural parsing can't detect a file modified after signing —
+        # Structural parsing can't detect a file modified after signing -
         # say so instead of letting the binaries look verified.
         _add([Finding(
             module="signature",

@@ -1,6 +1,6 @@
 """
 Lightweight X.509 certificate analysis for bundled certificate files found
-on a Linux or macOS target (PEM/DER .crt, .cer, .pem files) — flags
+on a Linux or macOS target (PEM/DER .crt, .cer, .pem files) - flags
 self-signed, expired, and weak-signature-algorithm certificates.
 
 This is deliberately independent from signature_module.py's Authenticode
@@ -40,7 +40,7 @@ class CertFinding:
 
 # Well-known system/vendor CA bundle filenames. These are large collections
 # of legitimate root CAs (Mozilla/curl/OS trust stores) that are *expected*
-# to be self-signed by design — scanning them as if they were an
+# to be self-signed by design - scanning them as if they were an
 # application's own certificate produces pure noise, not findings.
 KNOWN_CA_BUNDLE_NAMES = {
     "ca-bundle.crt", "ca-certificates.crt", "cacert.pem", "cacerts",
@@ -72,7 +72,7 @@ def analyze_certificate_file(path: Path) -> CertFinding:
     result = CertFinding(path=str(path))
 
     if path.name.lower() in KNOWN_CA_BUNDLE_NAMES:
-        result.error = "Recognized system/vendor CA trust bundle — skipped (not an application certificate)"
+        result.error = "Recognized system/vendor CA trust bundle - skipped (not an application certificate)"
         return result
 
     try:
@@ -92,7 +92,7 @@ def analyze_certificate_file(path: Path) -> CertFinding:
                                   if cert.signature_hash_algorithm else "unknown")
     result.is_weak_algorithm = result.signature_algorithm.lower() in WEAK_SIGNATURE_ALGORITHMS
 
-    # Full Name (all RDNs) equality, not just Common Name — two distinct
+    # Full Name (all RDNs) equality, not just Common Name - two distinct
     # certs can legitimately share a CN (e.g. a wildcard reused across
     # intermediate + leaf test fixtures) without being self-signed, and
     # relying on CN alone both under- and over-detects.

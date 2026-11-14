@@ -3,7 +3,7 @@ Shannon entropy scoring for high-entropy string detection.
 
 Used to catch secrets that don't match a known regex pattern (custom API key
 formats, random tokens, etc.) by flagging substrings with unusually high
-randomness — the same technique used by gitleaks/trufflehog's entropy checks.
+randomness - the same technique used by gitleaks/trufflehog's entropy checks.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import re
 from collections import Counter
 
 # Magic bytes for common binary formats that show up base64-encoded inside
-# config/resource/XML files (embedded icons, fonts, small archives) — these
+# config/resource/XML files (embedded icons, fonts, small archives) - these
 # are exactly the kind of long, high-entropy blob that used to get flagged
 # as a "possible secret" purely on randomness, which is a frequent and
 # unhelpful false-positive source in real-world installers.
@@ -28,7 +28,7 @@ _BINARY_MAGIC_PREFIXES = (
 _CANDIDATE_RE = re.compile(r"[A-Za-z0-9+/_\-=]{20,}")
 
 # Standard GUID/UUID shapes (with or without braces/dashes) are hex data,
-# not secrets — compiled binaries and config files are full of them
+# not secrets - compiled binaries and config files are full of them
 # (class IDs, component IDs, .NET type GUIDs) and their entropy sits right
 # at the hex-charset threshold, making them a common false-positive source.
 _GUID_RE = re.compile(
@@ -50,7 +50,7 @@ def _looks_like_encoded_binary_blob(candidate: str) -> bool:
     True if `candidate` base64-decodes to the start of a known binary format
     (PNG/JPEG/GIF/BMP/ZIP/PDF/font/gzip). Long base64 blobs of embedded
     icons, fonts, or small archives inside config/resource/XML files are
-    high-entropy by construction but are not secrets — this keeps them out
+    high-entropy by construction but are not secrets - this keeps them out
     of the report instead of relying on an analyst to eyeball-dismiss them.
     """
     s = candidate.rstrip("=")

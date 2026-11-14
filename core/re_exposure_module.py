@@ -1,16 +1,16 @@
 """
-Module 4 — Reverse Engineering / Anti-Tamper Exposure.
+Module 4 - Reverse Engineering / Anti-Tamper Exposure.
 
-Static indicators only — no dynamic/runtime analysis, no bypass tooling.
+Static indicators only - no dynamic/runtime analysis, no bypass tooling.
 This module identifies *exposure*, not exploitation, per the project spec.
 
 Covers:
   - Assembly / compiler-level exploit mitigations: ASLR (/DYNAMICBASE), DEP
     (/NXCOMPAT), SafeSEH (/SAFESEH, 32-bit only), Control Flow Guard
-    (/GUARD:CF) — the "Assembly Security Analysis" checklist from thick-
+    (/GUARD:CF) - the "Assembly Security Analysis" checklist from thick-
     client methodology (equivalent to Get-PESecurity).
   - Packer detection via section entropy + known packer section-name
-    signatures (UPX, Themida, VMProtect, etc.) — high entropy is also
+    signatures (UPX, Themida, VMProtect, etc.) - high entropy is also
     reported as an inverse signal (unpacked .NET/Java = easily decompilable).
   - .NET obfuscation check: detects whether a .NET assembly shows known
     obfuscator markers; flags "not obfuscated" when the binary appears to
@@ -44,13 +44,13 @@ from core.plugin_system import compile_yara_rules
 from core.indicator_utils import filter_out_version_strings, is_version_attribute_context
 
 # Import functions whose presence signals anti-debug awareness. Presence is
-# a maturity signal only — this module never generates bypass code.
+# a maturity signal only - this module never generates bypass code.
 ANTI_DEBUG_APIS = {
     "isdebuggerpresent", "checkremotedebuggerpresent",
     "ntqueryinformationprocess", "outputdebugstringa", "outputdebugstringw",
 }
 
-# Keywords suggesting sensitive client-side logic — used only to decide
+# Keywords suggesting sensitive client-side logic - used only to decide
 # whether "not obfuscated" is worth flagging (readable IL for a throwaway
 # utility DLL is low-value noise; readable IL handling license/crypto logic
 # is a real finding).
@@ -61,7 +61,7 @@ SENSITIVE_LOGIC_KEYWORDS = (
 
 URL_RE = re.compile(r"https?://[^\s'\"<>]+", re.IGNORECASE)
 IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-# Matched against raw extracted binary strings, not natural-language text —
+# Matched against raw extracted binary strings, not natural-language text -
 # the original pattern (`(?:[a-z0-9-]+\.)+[a-z]{2,}`) had no TLD validation
 # at all, so it matched any "x.yz"-shaped noise fragment from decoded
 # binary data (e.g. "06.eT", "5.Oi", "4.cx") as if it were a real domain.
@@ -110,7 +110,7 @@ _PACKER_SIGNATURES_PATH = Path(__file__).resolve().parent.parent / "rules" / "pa
 HIGH_SECTION_ENTROPY_THRESHOLD = 7.2
 
 # Standard PE section names that are near-universally high-entropy for
-# entirely benign reasons — .rsrc holds compressed icons/bitmaps/version
+# entirely benign reasons - .rsrc holds compressed icons/bitmaps/version
 # info/manifests, .debug/.pdata hold structured-but-dense debug data.
 # Flagging these specifically as "possible unrecognized packer" produces
 # near-constant noise, since almost every Windows executable has an
@@ -220,7 +220,7 @@ def _mitigation_findings(pe_path: Path, mit: MitigationInfo) -> list[Finding]:
                     f"select the running process > Properties > General tab > "
                     f"'DEP' should show 'Disabled' if the flag is truly not "
                     f"honored (Windows may still enforce system-wide DEP "
-                    f"depending on policy — note both the binary flag and the "
+                    f"depending on policy - note both the binary flag and the "
                     f"runtime enforcement outcome as separate data points)."
                 ),
                 tags=["re-exposure", "mitigation", "dep"],
@@ -345,7 +345,7 @@ def _packer_findings(pe_path: Path, pe_info: PEInfo, signatures: dict) -> list[F
                     "compression or encryption, but no known packer "
                     "signature matched. This can indicate a custom/unknown "
                     "packer, encrypted resources, or simply compressed "
-                    "embedded assets (icons, installers) — manual review "
+                    "embedded assets (icons, installers) - manual review "
                     "recommended to distinguish these cases."
                 ),
                 remediation="Manually inspect the high-entropy section(s) to determine whether they contain packed code, encrypted data, or compressed assets.",
@@ -378,11 +378,11 @@ def _dotnet_obfuscation_finding(
     matched_marker = next((m for m in markers if m.lower() in joined_lower), None)
 
     if matched_marker:
-        return None  # obfuscated — no finding, this is the good case
+        return None  # obfuscated - no finding, this is the good case
 
     has_sensitive_logic = any(kw in joined_lower for kw in SENSITIVE_LOGIC_KEYWORDS)
     if not has_sensitive_logic:
-        return None  # not obfuscated, but nothing sensitive detected either — low value noise
+        return None  # not obfuscated, but nothing sensitive detected either - low value noise
 
     matched_kw = next(kw for kw in SENSITIVE_LOGIC_KEYWORDS if kw in joined_lower)
     return Finding(
@@ -404,7 +404,7 @@ def _dotnet_obfuscation_finding(
             "Apply a .NET obfuscator to assemblies containing licensing, "
             "activation, or cryptographic key-handling logic, and treat any "
             "client-side license/entitlement check as inherently bypassable "
-            "regardless of obfuscation — enforce authoritative checks "
+            "regardless of obfuscation - enforce authoritative checks "
             "server-side where possible."
         ),
         poc=(
@@ -419,7 +419,7 @@ def _dotnet_obfuscation_finding(
             f"impact by identifying the boolean/branch that gates the "
             f"licensed feature and confirming it could be patched directly "
             f"in IL (e.g. with dnSpy's 'Edit Method' or a simple IL patcher) "
-            f"to always return true — do this only in an isolated test "
+            f"to always return true - do this only in an isolated test "
             f"copy, never against a live licensing server."
         ),
         tags=["re-exposure", "dotnet", "obfuscation"],
@@ -432,7 +432,7 @@ def _dotnet_obfuscation_finding(
 # ---------------------------------------------------------------------------
 
 def _pdb_leak_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
-    # A bare "Launcher.pdb" (e.g. built with /PDBALTPATH) reveals nothing —
+    # A bare "Launcher.pdb" (e.g. built with /PDBALTPATH) reveals nothing -
     # only a path with directories leaks build-machine details.
     if not pe_info.pdb_path or not re.search(r"[\\/]", pe_info.pdb_path):
         return None
@@ -449,7 +449,7 @@ def _pdb_leak_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
             "typically left over from an unstripped release build. This "
             "commonly leaks internal developer machine usernames, build "
             "server directory structure, or internal project naming "
-            "conventions — minor but free reconnaissance information for "
+            "conventions - minor but free reconnaissance information for "
             "an attacker profiling the target organization's build "
             "environment."
         ),
@@ -465,7 +465,7 @@ def _pdb_leak_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
             f"     python3 -c \"import pefile; pe=pefile.PE(r'{pe_path}'); "
             f"pe.parse_data_directories(); print(pe.DIRECTORY_ENTRY_DEBUG[0].entry.PdbFileName)\"\n\n"
             f"2. Review the leaked path for anything organizationally "
-            f"sensitive: '{pe_info.pdb_path}' — note the OS username, drive "
+            f"sensitive: '{pe_info.pdb_path}' - note the OS username, drive "
             f"layout, and any internal project/codename it reveals for the "
             f"client report."
         ),
@@ -485,7 +485,7 @@ def _anti_debug_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
         for fn in funcs
     }
     if all_funcs & ANTI_DEBUG_APIS:
-        return None  # anti-debug awareness present — no finding needed
+        return None  # anti-debug awareness present - no finding needed
 
     return Finding(
         module="re_exposure",
@@ -496,7 +496,7 @@ def _anti_debug_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
         evidence="No import of IsDebuggerPresent/CheckRemoteDebuggerPresent/NtQueryInformationProcess/OutputDebugString found",
         description=(
             "This binary shows no evidence of anti-debugging checks. This "
-            "is an exposure/maturity signal only — it means the binary can "
+            "is an exposure/maturity signal only - it means the binary can "
             "likely be attached to and analyzed with a standard debugger "
             "(x64dbg, WinDbg) without needing to defeat any anti-debug "
             "trick, which lowers the effort required for dynamic reverse "
@@ -508,7 +508,7 @@ def _anti_debug_finding(pe_path: Path, pe_info: PEInfo) -> Finding | None:
             "If runtime tamper-resistance is a business requirement for "
             "this binary (e.g. anti-cheat, DRM, licensing enforcement), "
             "consider standard anti-debug/anti-tamper techniques as one "
-            "layer of defense — but do not rely on them as a primary "
+            "layer of defense - but do not rely on them as a primary "
             "security control, since they only raise analysis cost rather "
             "than prevent it."
         ),
@@ -522,7 +522,7 @@ def _looks_like_plausible_domain(candidate: str) -> bool:
     Extra filter applied only to DOMAIN_RE matches, on top of the
     TLD-restricted regex. A real, common TLD alone still lets through
     noise like "4Z.jp" (jp is a genuine TLD) when matched against raw
-    binary string garbage — real registrable domains essentially always
+    binary string garbage - real registrable domains essentially always
     have a second-level label of 3+ characters that isn't mostly digits
     (compare actual domains like "acme.com" or "api.io" against noise
     fragments like "4Z.jp" or "5.to").
@@ -559,7 +559,7 @@ def _artifact_findings(pe_path: Path, strings: list[str], api_names: frozenset[s
     # A build/product version number ("6.0.0.0", "19.0.3.0", "10.60.20.0")
     # is structurally identical to a dotted-quad IPv4 address, and this
     # binary's own VERSIONINFO resource is the authoritative source for
-    # which specific numbers are actually its version — not a guess from
+    # which specific numbers are actually its version - not a guess from
     # digit patterns alone. Cross-check IP matches against it before they
     # ever become a finding, the same way secrets_module already does for
     # its "hardcoded-ip" rule.
@@ -571,7 +571,7 @@ def _artifact_findings(pe_path: Path, strings: list[str], api_names: frozenset[s
             # *value* of a version="..." / FileVersion=... attribute
             # (extremely common in embedded manifest XML, e.g. the
             # Microsoft.Windows.Common-Controls dependency every Windows
-            # app manifest declares) — a false-positive source the plain
+            # app manifest declares) - a false-positive source the plain
             # VERSIONINFO cross-check below doesn't cover, since that XML
             # version string never appears in the PE's VERSIONINFO
             # resource at all.
@@ -682,7 +682,7 @@ def _manifest_findings(pe_path: Path, pe_info: PEInfo) -> list[Finding]:
         return []
 
     # Capture the actual declared value, not just "this keyword appeared"
-    # — requestedExecutionLevel="asInvoker" is benign, "requireAdministrator"
+    # - requestedExecutionLevel="asInvoker" is benign, "requireAdministrator"
     # or "highestAvailable" is a real privilege-escalation-relevant signal,
     # and a report that only says "requestedexecutionlevel" was matched
     # gives an analyst no way to tell which without opening the binary.
@@ -853,7 +853,7 @@ def run(
     """
     Entry point for Module 4. Statically analyzes every PE file under
     target_dir for exploit-mitigation exposure, packer/obfuscation
-    indicators, PDB leakage, and anti-debug maturity signals — or, if
+    indicators, PDB leakage, and anti-debug maturity signals - or, if
     `single_file` is given, just that one PE file.
     """
     target_dir = Path(target_dir)
@@ -926,7 +926,7 @@ def run(
             if error_callback:
                 error_callback(f"re_exposure: Electron source checks failed: {e}")
 
-    # Managed Java bytecode (.jar/.war/.class) — not PE files, so the loop
+    # Managed Java bytecode (.jar/.war/.class) - not PE files, so the loop
     # above never sees them. scan_tree is a no-op for a non-Java single_file.
     try:
         _add(java_checks.scan_tree(target_dir, single_file=single_file))

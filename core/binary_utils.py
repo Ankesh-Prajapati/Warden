@@ -4,7 +4,7 @@ Shared ELF (Linux) and Mach-O (macOS) parsing helpers.
 Mirrors pe_utils.py's role for Windows PE files: magic-byte identification,
 lightweight header parsing done in pure Python (no extra dependency), and
 best-effort enrichment via system tools (`readelf`, `otool`, `codesign`)
-when they're present on the analyst's PATH — the same "structural parse
+when they're present on the analyst's PATH - the same "structural parse
 always runs, deeper tool-assisted check is a bonus" pattern used by
 signature_module.py for osslsigncode.
 
@@ -78,7 +78,7 @@ def _readelf_available() -> bool:
 
 def parse_elf(path: Path) -> ELFInfo:
     """
-    Parse the fixed-size ELF header directly (arch, type, bitness) — always
+    Parse the fixed-size ELF header directly (arch, type, bitness) - always
     works, no external tool needed. NEEDED shared-library entries and
     RPATH/RUNPATH (dynamic-section contents) require walking the dynamic
     section; that part is delegated to `readelf -d` when available, since
@@ -143,7 +143,7 @@ def parse_elf(path: Path) -> ELFInfo:
                     continue
                 # Flags column is a short token made only of R/W/E letters
                 # (e.g. "RW " or "RWE"), separate from the numeric offset/
-                # size/align columns — matching it precisely avoids the
+                # size/align columns - matching it precisely avoids the
                 # previous fragile "'RWE' in line" substring check, which
                 # could misfire against unrelated numeric columns.
                 tokens = line.split()
@@ -214,7 +214,7 @@ def parse_macho(path: Path) -> MachOInfo:
     Identify the Mach-O variant from magic bytes (always works), then
     enrich with linked-library and code-signing info via `otool`/`codesign`
     when running on a machine that has them (typically macOS itself, or an
-    analyst workstation with cctools installed). Falls back gracefully —
+    analyst workstation with cctools installed). Falls back gracefully -
     the magic-byte identification and category-level findings never depend
     on these tools being present.
     """

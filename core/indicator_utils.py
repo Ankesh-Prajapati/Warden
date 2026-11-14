@@ -14,7 +14,7 @@ import re
 from urllib.parse import urlparse
 
 # Matches immediately-preceding context like `version="`, `Version:`,
-# `FileVersion=`, `assemblyIdentity ... version='` — i.e. the match is the
+# `FileVersion=`, `assemblyIdentity ... version='` - i.e. the match is the
 # *value* of a version attribute/field, not a standalone network address.
 # This is the manifest/XML equivalent of the PE-VERSIONINFO cross-check:
 # embedded application manifests (assemblyIdentity, dependency entries for
@@ -33,7 +33,7 @@ _VERSION_CONTEXT_RE = re.compile(
 
 def is_version_attribute_context(text: str, match_start: int, lookback: int = 40) -> bool:
     """True if the text immediately before `match_start` looks like a
-    `version="` / `Version:` / `FileVersion=` style attribute assignment —
+    `version="` / `Version:` / `FileVersion=` style attribute assignment -
     meaning the dotted-quad number at `match_start` is a declared version
     number, not a real network indicator."""
     prefix = text[max(0, match_start - lookback):match_start]
@@ -64,7 +64,7 @@ BOILERPLATE_DOMAINS = {
 PLACEHOLDER_EMAIL_DOMAINS = {"example.com", "example.org", "test.com", "domain.com", "email.com"}
 
 # Internal/dev/staging host markers, matched against the *parsed hostname*
-# (or its labels) — never as a raw substring of the full URL, which is what
+# (or its labels) - never as a raw substring of the full URL, which is what
 # previously caused "test." to false-positive-match inside "latest.com".
 INTERNAL_HOST_EXACT_OR_PREFIX = ("localhost", "127.0.0.1", "0.0.0.0")
 INTERNAL_HOST_LABELS = {"dev", "development", "stage", "staging", "test", "testing",
@@ -76,7 +76,7 @@ _PRIVATE_172_RE = re.compile(r"^172\.(1[6-9]|2\d|3[01])\.")
 
 def is_valid_ipv4(candidate: str) -> bool:
     """Reject numeric look-alikes (version strings like 999.1.2.3, or
-    build numbers) that the loose \\d{1,3} regex would otherwise accept —
+    build numbers) that the loose \\d{1,3} regex would otherwise accept -
     each octet must be a real 0-255 byte value."""
     parts = candidate.split(".")
     if len(parts) != 4:
@@ -122,8 +122,8 @@ def filter_out_version_strings(ips: list[str], version_strings: set[str]) -> lis
     Drop any dotted-quad "IP" that exactly matches a version string the
     same binary actually declares in its own VERSIONINFO resource (e.g.
     "6.0.0.0", "19.0.3.0", "10.60.20.0"). A build/product version number
-    is structurally identical to an IPv4 address — both are four
-    dot-separated 0-255 numbers — so this is the single most common
+    is structurally identical to an IPv4 address - both are four
+    dot-separated 0-255 numbers - so this is the single most common
     false-positive source for IP extraction against PE binaries, and the
     fix is to check against the specific version string(s) this binary
     itself declares, not to guess from the digits alone.
@@ -181,7 +181,7 @@ def extract_api_endpoints(text: str, max_results: int = 10) -> list[str]:
 def classify_internal_host(url: str) -> bool:
     """True if `url`'s *hostname* (not the raw string) looks internal/dev/
     staging/private. Matches on parsed hostname labels and IP prefixes only
-    — never a substring check against the full URL — to avoid false
+    - never a substring check against the full URL - to avoid false
     positives like 'test.' matching inside 'latest.com'."""
     try:
         host = (urlparse(url).hostname or "").lower()

@@ -103,7 +103,7 @@ _WEAK_PROTOCOLS = {48: "Ssl3", 192: "Tls (1.0)", 768: "Tls11 (1.1)"}
 
 
 def _ref_key(md_class, name: str) -> str | None:
-    # dnfile returns HeapItemString, not str — stringify before use.
+    # dnfile returns HeapItemString, not str - stringify before use.
     tn = getattr(md_class, "TypeName", None)
     if tn is None:
         return None
@@ -162,7 +162,7 @@ def _always_true_tokens(data: bytes, md) -> set[int]:
 
 def _trust_all_wired(data: bytes, md, cert_ctor_token: bytes) -> bool:
     """True iff an always-true method is turned into a delegate and passed to
-    `newobj RemoteCertificateValidationCallback` — the real trust-all wiring.
+    `newobj RemoteCertificateValidationCallback` - the real trust-all wiring.
     Requiring the newobj excludes unrelated `=> true` property getters."""
     true_tokens = _always_true_tokens(data, md)
     if not true_tokens:
@@ -282,7 +282,7 @@ def check_assembly(path: Path) -> list[Finding]:
                     "pin the expected certificate/key.", "CWE-295"))
             else:
                 findings.append(_finding(
-                    "dotnet-custom-cert-validation", "Custom TLS certificate validation present — review",
+                    "dotnet-custom-cert-validation", "Custom TLS certificate validation present - review",
                     Severity.LOW, path, "Registers a RemoteCertificateValidationCallback",
                     "The app installs its own server-certificate validation callback. This is only safe if it rejects "
                     "policy errors; a callback that ignores them silently disables TLS authentication.",

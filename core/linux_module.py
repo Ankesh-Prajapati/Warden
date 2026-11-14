@@ -1,23 +1,23 @@
 """
-Module 5 — Linux Thick-Client Static Security Assessment.
+Module 5 - Linux Thick-Client Static Security Assessment.
 
-Statically assesses an extracted/installed Linux desktop application tree —
+Statically assesses an extracted/installed Linux desktop application tree -
 NOT the host OS. Covers, per the project spec:
 
-  Application Discovery    — install metadata (.desktop, dpkg control, rpm
+  Application Discovery    - install metadata (.desktop, dpkg control, rpm
                               spec), discovered ELF executables
-  Binary Analysis          — ELF header facts, hardening flags (PIE/NX),
+  Binary Analysis          - ELF header facts, hardening flags (PIE/NX),
                               embedded strings -> URLs/IPs/emails/endpoints
-  Configuration Analysis   — inventory of config files present
-  Sensitive Data Discovery — reuses secrets_module's rule+entropy engine
-  Local Database Analysis  — SQLite/embedded DB inventory + secret scan
-  Log Analysis             — log file inventory + secret scan
-  Certificate Analysis     — bundled cert files: expired/self-signed/weak
-  Update Mechanism Analysis— update URLs, HTTPS usage, signature-verify hints
-  File Permission Analysis — world-writable app/config/cache/log paths
-  Third-Party Libraries    — NEEDED shared libraries linked by each ELF
-  Network Artifact Discovery — internal hosts / dev-staging URLs found
-  Platform-specific        — systemd unit files, cron jobs, startup scripts
+  Configuration Analysis   - inventory of config files present
+  Sensitive Data Discovery - reuses secrets_module's rule+entropy engine
+  Local Database Analysis  - SQLite/embedded DB inventory + secret scan
+  Log Analysis             - log file inventory + secret scan
+  Certificate Analysis     - bundled cert files: expired/self-signed/weak
+  Update Mechanism Analysis- update URLs, HTTPS usage, signature-verify hints
+  File Permission Analysis - world-writable app/config/cache/log paths
+  Third-Party Libraries    - NEEDED shared libraries linked by each ELF
+  Network Artifact Discovery - internal hosts / dev-staging URLs found
+  Platform-specific        - systemd unit files, cron jobs, startup scripts
 
 Reuses core/secrets_module.py (rule+entropy engine), core/fs_walk.py, and
 core/binary_utils.py / core/cert_utils.py. Does not import or modify any
@@ -339,7 +339,7 @@ def _certificate_analysis(target_dir: Path) -> list[Finding]:
                 file_path=str(p), severity=Severity.HIGH,
             ))
         # Root/intermediate CA certificates are *expected* to be self-signed
-        # by design (that's what makes them a trust anchor) — only flag
+        # by design (that's what makes them a trust anchor) - only flag
         # self-signed for end-entity (non-CA) certs, where it's a real
         # anti-pattern (e.g. a self-signed TLS leaf cert used in production).
         if cert.is_self_signed and not cert.is_ca_certificate:
@@ -352,7 +352,7 @@ def _certificate_analysis(target_dir: Path) -> list[Finding]:
             ))
         # A self-signed root CA's own signature algorithm doesn't carry
         # security weight (trust is anchored by out-of-band distribution,
-        # not by the signature) — many long-lived, still-legitimate roots
+        # not by the signature) - many long-lived, still-legitimate roots
         # use SHA-1. Only flag weak algorithms on non-CA certs.
         if cert.is_weak_algorithm and not cert.is_ca_certificate:
             findings.append(_mk(
@@ -386,8 +386,8 @@ def _update_mechanism_analysis(target_dir: Path, elf_files: list[Path], single_f
     seen_urls = set()
     for path_str, text in candidates:
         lowered = text.lower()
-        # The file-level keyword check alone is far too loose — nearly every
-        # binary contains "update" — so the URL itself must look update-related.
+        # The file-level keyword check alone is far too loose - nearly every
+        # binary contains "update" - so the URL itself must look update-related.
         if not any(k in lowered for k in UPDATE_KEYWORDS):
             continue
         for url in extract_urls(text, max_results=50):
@@ -524,7 +524,7 @@ def _network_artifacts(all_findings: list[Finding]) -> list[Finding]:
             if url in seen:
                 continue
             # Classifies against the *parsed hostname*, not a raw substring
-            # of the URL — avoids false positives like "test." incorrectly
+            # of the URL - avoids false positives like "test." incorrectly
             # matching inside an unrelated domain such as "latest.com".
             if classify_internal_host(url):
                 seen.add(url)
@@ -595,7 +595,7 @@ def _tool_gap_findings(target_dir: Path, elf_files: list[Path]) -> list[Finding]
 
 
 def _single_file_discovery(single_file: Path, elf_files: list[Path]) -> list[Finding]:
-    if not elf_files:  # not an ELF target — nothing Linux-specific to say
+    if not elf_files:  # not an ELF target - nothing Linux-specific to say
         return []
     return [_mk(
         "Application Discovery", "Single File Scope", "Info",

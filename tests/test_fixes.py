@@ -162,7 +162,7 @@ def test_winverifytrust_detects_tampering():
 
 
 def test_incremental_rescan_keeps_findings():
-    # Default cache location lives inside the target — it must not be scanned.
+    # Default cache location lives inside the target - it must not be scanned.
     target = _target(SECRET_FILES)
     first = run_scan(target, modules=["secrets"], extract_archives=False, incremental=True)
     second = run_scan(target, modules=["secrets"], extract_archives=False, incremental=True)

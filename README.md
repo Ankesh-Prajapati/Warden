@@ -6,8 +6,8 @@
 
 ### Static security analysis for thick-client desktop applications
 
-*Catch the findings a manual reverse-engineer would — unsigned binaries, trust-all TLS,
-insecure deserialization, weak crypto, DLL hijacking, leaked secrets — **without running the target.***
+*Catch the findings a manual reverse-engineer would - unsigned binaries, trust-all TLS,
+insecure deserialization, weak crypto, DLL hijacking, leaked secrets - **without running the target.***
 
 [![Latest Release](https://img.shields.io/github/v/release/Ankesh-Prajapati/Warden?label=download&color=2ea44f)](https://github.com/Ankesh-Prajapati/Warden/releases/latest)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
@@ -28,36 +28,36 @@ insecure deserialization, weak crypto, DLL hijacking, leaked secrets — **witho
 <td width="33%" valign="top">
 
 ### 🧊 Opens real installers
-Unpacks **NSIS, Inno Setup, MSI, Electron (`app.asar`), 7z/ZIP/CAB** — and even a plain PE carrying a nested archive — then scans the **actual application**, not just the wrapper.
+Unpacks **NSIS, Inno Setup, MSI, Electron (`app.asar`), 7z/ZIP/CAB** - and even a plain PE carrying a nested archive - then scans the **actual application**, not just the wrapper.
 
 </td>
 <td width="33%" valign="top">
 
 ### 🔬 Reads the bytecode
-Goes past strings: parses **.NET metadata + IL** (`dnfile`) and **Java `.class`/`.jar`** to prove real API usage — trust-all TLS, insecure deserialization, weak crypto.
+Goes past strings: parses **.NET metadata + IL** (`dnfile`) and **Java `.class`/`.jar`** to prove real API usage - trust-all TLS, insecure deserialization, weak crypto.
 
 </td>
 <td width="33%" valign="top">
 
 ### 📑 Report you can hand over
-A clean, filterable **HTML/JSON report** — executive summary, findings index, evidence, remediation, copy-paste PoC, and a print-to-PDF layout. Noise lives in a separate appendix.
+A clean, filterable **HTML/JSON report** - executive summary, findings index, evidence, remediation, copy-paste PoC, and a print-to-PDF layout. Noise lives in a separate appendix.
 
 </td>
 </tr>
 </table>
 
-> **Static-only by design.** Warden reads and parses — it never executes the target, hooks processes, or exploits anything. It automates the *static* half of a thick-client assessment so your manual time goes to the dynamic and business-logic work.
+> **Static-only by design.** Warden reads and parses - it never executes the target, hooks processes, or exploits anything. It automates the *static* half of a thick-client assessment so your manual time goes to the dynamic and business-logic work.
 
 ---
 
 ## 🎯 What it catches
 
-<div align="center"><em>Technology-aware deep checks — the findings a manual review in dnSpy / CFR / CFF Explorer would surface, automated.</em></div>
+<div align="center"><em>Technology-aware deep checks - the findings a manual review in dnSpy / CFR / CFF Explorer would surface, automated.</em></div>
 
 | Surface | Representative findings |
 |---|---|
 | 🪟 **Windows PE** | Unsigned / tampered / expired signing · ASLR · DEP · CFG · SafeSEH · packers · PDB & build-path leaks · embedded manifest / privilege level |
-| 🧩 **DLL hijacking** | Phantom imports · unsafe search-order · writable binary dirs · unquoted service paths — each with a reproduction PoC |
+| 🧩 **DLL hijacking** | Phantom imports · unsafe search-order · writable binary dirs · unquoted service paths - each with a reproduction PoC |
 | 🟣 **.NET** *(metadata + IL)* | Insecure deserialization (`BinaryFormatter`, `SoapFormatter`, `LosFormatter`, `JavaScriptSerializer`+resolver, Remoting) · weak crypto (DES/RC2/3DES/MD5) · **TLS validation disabled** · weak TLS protocol pinned |
 | ☕ **Java** *(bytecode)* | Trust-all `TrustManager` / `HostnameVerifier` · weak cipher (DES/RC4/ECB) · weak hash (MD5/SHA-1) · `ObjectInputStream` deserialization · hardcoded JDBC credentials |
 | ⚛️ **Electron** | Runtime fuses (RunAsNode, NODE_OPTIONS, `--inspect`, ASAR integrity) · ASAR integrity on an unsigned EXE · risky `webPreferences` · missing navigation guards · outdated Chromium |
@@ -71,11 +71,11 @@ A clean, filterable **HTML/JSON report** — executive summary, findings index, 
 
 ## 📦 Install
 
-### Option A — Standalone Windows app *(no Python)*
-**[⬇ Download `Warden.exe`](https://github.com/Ankesh-Prajapati/Warden/releases/latest)** and double-click. That's it — one file, no console window.
+### Option A - Standalone Windows app *(no Python)*
+**[⬇ Download `Warden.exe`](https://github.com/Ankesh-Prajapati/Warden/releases/latest)** and double-click. That's it - one file, no console window.
 *Install [7-Zip](https://www.7-zip.org/) for installer/archive extraction; [innoextract](https://constexpr.org/innoextract/) if you assess Inno Setup installers.*
 
-### Option B — From source *(Python 3.10+)*
+### Option B - From source *(Python 3.10+)*
 
 ```bash
 git clone https://github.com/Ankesh-Prajapati/Warden.git && cd Warden
@@ -148,9 +148,9 @@ python cli.py scan app.exe --output report.html
 
 ## 🧊 Archive & installer extraction
 
-On by default. Before scanning, Warden unpacks installer/archive-looking files — **NSIS, Inno Setup, MSI, Electron `app.asar`, self-extracting installers, ZIP/CAB/7z**, and even a plain PE carrying a nested archive in its resources — then recursively scans the extracted contents.
+On by default. Before scanning, Warden unpacks installer/archive-looking files - **NSIS, Inno Setup, MSI, Electron `app.asar`, self-extracting installers, ZIP/CAB/7z**, and even a plain PE carrying a nested archive in its resources - then recursively scans the extracted contents.
 
-Why it matters: a real Electron installer isn't the app. Warden opens `app-64.7z → app.asar → the renderer bundle`, an NSIS setup down to its plugin DLLs, and an Inno Setup installer via `innoextract`. Findings from extracted content are tagged `extracted-content` and note their origin. Bounded by nesting depth, a total-size cap (zip-bomb protection, checked *before* writing), and a per-archive candidate cap. Missing a tool is never fatal — the outer file is still scanned, with a note.
+Why it matters: a real Electron installer isn't the app. Warden opens `app-64.7z → app.asar → the renderer bundle`, an NSIS setup down to its plugin DLLs, and an Inno Setup installer via `innoextract`. Findings from extracted content are tagged `extracted-content` and note their origin. Bounded by nesting depth, a total-size cap (zip-bomb protection, checked *before* writing), and a per-archive candidate cap. Missing a tool is never fatal - the outer file is still scanned, with a note.
 
 ---
 
@@ -161,18 +161,18 @@ Self-contained, single-file **HTML** (plus optional **JSON**) you can send to a 
 - **Executive summary** with risk rating and severity distribution
 - **Findings index** (`W-001…`) → filter by severity / area / full-text search
 - Per-finding **evidence, affected locations, remediation, and copy-paste PoC**
-- **Reverse-engineering inventory appendix** — endpoints, dependencies, frameworks, and *verified hardening controls* kept out of the findings count
+- **Reverse-engineering inventory appendix** - endpoints, dependencies, frameworks, and *verified hardening controls* kept out of the findings count
 - **Print → PDF** layout; light & dark themes; renders cleanly from 0 to hundreds of findings
 
-> Reports contain complete extracted evidence (possibly credentials, tokens, proprietary indicators). Warden never transmits them — keep them local and share only with authorization. Desktop reports land in `reports/<AppName>/<AppName>_report_<timestamp>.html` next to the app (falling back to `~/.warden/reports` when the install folder is read-only).
+> Reports contain complete extracted evidence (possibly credentials, tokens, proprietary indicators). Warden never transmits them - keep them local and share only with authorization. Desktop reports land in `reports/<AppName>/<AppName>_report_<timestamp>.html` next to the app (falling back to `~/.warden/reports` when the install folder is read-only).
 
 <details>
 <summary><b>Custom rules & plugins</b></summary>
 
-- **Secret rules** — YAML under `rules/`.
-- **YARA** — `rules/yara/` or `--yara-rules-dir ./my-yara`.
-- **Python detectors** — `--plugins-dir ./plugins`, each exposing `def scan_file(path): return []`.
-  *Plugins run as trusted code and are not sandboxed — only point Warden at folders you trust.*
+- **Secret rules** - YAML under `rules/`.
+- **YARA** - `rules/yara/` or `--yara-rules-dir ./my-yara`.
+- **Python detectors** - `--plugins-dir ./plugins`, each exposing `def scan_file(path): return []`.
+  *Plugins run as trusted code and are not sandboxed - only point Warden at folders you trust.*
 
 </details>
 
@@ -195,7 +195,7 @@ Both interfaces call `core.scanner.run_scan()`; module output is normalized into
 
 ---
 
-## 🧭 What Warden is — and isn't
+## 🧭 What Warden is - and isn't
 
 | ✅ Warden does (static) | ❌ Warden does not (dynamic / manual) |
 |---|---|
@@ -204,7 +204,7 @@ Both interfaces call `core.scanner.run_scan()`; module output is normalized into
 | Flag unsigned/weak-crypto/trust-all/secrets | Intercept live traffic / MITM |
 | Produce a shareable report with PoC steps | Memory/registry diffing, fuzzing, business logic |
 
-It's the **static client-side pass** of a thick-client engagement — fast, repeatable, low-noise — leaving the runtime and logic work to you.
+It's the **static client-side pass** of a thick-client engagement - fast, repeatable, low-noise - leaving the runtime and logic work to you.
 
 <details>
 <summary><b>Known limitations</b></summary>
@@ -239,7 +239,7 @@ Keep `build/`, `dist/`, `__pycache__/`, `.pytest_cache/`, `.warden_cache/`, venv
 >
 > Use it **exclusively** against applications you **own** or have **explicit written permission** to assess. Scanning, reverse-engineering, or extracting software without authorization may violate computer-misuse law, software license terms, and NDAs.
 >
-> You are solely responsible for how you use this tool. The author accepts **no liability** for misuse or for any damage arising from its use. Reports can contain sensitive client data — handle, store, and share them only within the bounds of your engagement.
+> You are solely responsible for how you use this tool. The author accepts **no liability** for misuse or for any damage arising from its use. Reports can contain sensitive client data - handle, store, and share them only within the bounds of your engagement.
 >
 > **No authorization? Don't scan it.**
 

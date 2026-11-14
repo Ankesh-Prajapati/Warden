@@ -22,7 +22,7 @@ try:
 except ImportError:  # pragma: no cover
     pefile = None
 
-# Minimum printable-run length to count as an extractable "string" — mirrors
+# Minimum printable-run length to count as an extractable "string" - mirrors
 # the default of the classic `strings` utility.
 MIN_STRING_LEN = 6
 
@@ -53,7 +53,7 @@ class PEInfo:
 def is_pe_file(path: Path) -> bool:
     """
     Verify this is a genuine PE image, not just any file that happens to
-    start with the MZ magic bytes (the DOS stub header is only two bytes —
+    start with the MZ magic bytes (the DOS stub header is only two bytes -
     plenty of non-PE files, truncated downloads, or renamed files can
     coincidentally start with 'MZ'). Confirms the e_lfanew pointer at
     offset 0x3C resolves to an actual "PE\\0\\0" signature before treating
@@ -103,7 +103,7 @@ def get_security_directory_bytes(path: Path) -> Optional[bytes]:
     IMAGE_DIRECTORY_ENTRY_SECURITY data directory.
 
     Unlike every other data directory, the security directory's
-    VirtualAddress is a *file offset*, not an RVA — so this reads directly
+    VirtualAddress is a *file offset*, not an RVA - so this reads directly
     from the file rather than through pefile's RVA-mapped section data.
     Returns None if the file isn't a valid PE or has no security directory.
     """
@@ -256,7 +256,7 @@ def parse_pe(path: Path, with_section_entropy: bool = False) -> PEInfo:
 
     info.is_valid_pe = True
     info.is_dll = bool(pe.FILE_HEADER.Characteristics & 0x2000)  # IMAGE_FILE_DLL
-    # CLR runtime header (DATA_DIRECTORY[14]) — reliable for all .NET,
+    # CLR runtime header (DATA_DIRECTORY[14]) - reliable for all .NET,
     # including .NET Core/5+ which no longer import mscoree.dll.
     try:
         clr = pe.OPTIONAL_HEADER.DATA_DIRECTORY[
@@ -359,7 +359,7 @@ def get_version_strings(path: Path) -> set[str]:
     misidentified as an embedded IP address.
 
     Returns an empty set on any parse failure or if no VERSIONINFO
-    resource is present — callers should treat that as "nothing to
+    resource is present - callers should treat that as "nothing to
     exclude," not an error.
     """
     versions: set[str] = set()

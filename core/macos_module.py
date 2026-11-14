@@ -1,22 +1,22 @@
 """
-Module 6 — macOS Thick-Client Static Security Assessment.
+Module 6 - macOS Thick-Client Static Security Assessment.
 
-Statically assesses an extracted/installed macOS .app bundle — NOT the host
+Statically assesses an extracted/installed macOS .app bundle - NOT the host
 OS. Covers, per the project spec:
 
-  Application Discovery    — Info.plist metadata (bundle id, version, exec)
-  Binary Analysis          — Mach-O header facts, embedded strings ->
+  Application Discovery    - Info.plist metadata (bundle id, version, exec)
+  Binary Analysis          - Mach-O header facts, embedded strings ->
                               URLs/IPs/emails/endpoints, code-signing status
-  Configuration Analysis   — plist/config file inventory
-  Sensitive Data Discovery — reuses secrets_module's rule+entropy engine
-  Local Database Analysis  — SQLite/embedded DB inventory + secret scan
-  Log Analysis             — log file inventory + secret scan
-  Certificate Analysis     — bundled cert files: expired/self-signed/weak
-  Update Mechanism Analysis— Sparkle feed URL / HTTPS / EdDSA-signature hints
-  File Permission Analysis — world-writable bundle/config/cache/log paths
-  Third-Party Libraries    — linked dylibs + embedded Frameworks
-  Network Artifact Discovery — internal hosts / dev-staging URLs found
-  Platform-specific        — LaunchAgents/Daemons, entitlements, Keychain
+  Configuration Analysis   - plist/config file inventory
+  Sensitive Data Discovery - reuses secrets_module's rule+entropy engine
+  Local Database Analysis  - SQLite/embedded DB inventory + secret scan
+  Log Analysis             - log file inventory + secret scan
+  Certificate Analysis     - bundled cert files: expired/self-signed/weak
+  Update Mechanism Analysis- Sparkle feed URL / HTTPS / EdDSA-signature hints
+  File Permission Analysis - world-writable bundle/config/cache/log paths
+  Third-Party Libraries    - linked dylibs + embedded Frameworks
+  Network Artifact Discovery - internal hosts / dev-staging URLs found
+  Platform-specific        - LaunchAgents/Daemons, entitlements, Keychain
                               usage, embedded frameworks
 
 Reuses core/secrets_module.py (rule+entropy engine), core/fs_walk.py, and
@@ -250,7 +250,7 @@ def _binary_analysis(macho_files: list[Path]) -> list[Finding]:
                 findings.append(_mk(
                     "Binary Analysis", "Debuggable Entitlement in Release Binary", "Warning",
                     evidence="com.apple.security.get-task-allow present",
-                    description="This entitlement allows another process to attach a debugger — appropriate for dev builds only.",
+                    description="This entitlement allows another process to attach a debugger - appropriate for dev builds only.",
                     recommendation="Ensure this entitlement is stripped from release/distribution builds.",
                     file_path=str(path),
                     severity=Severity.MEDIUM,
@@ -387,7 +387,7 @@ def _update_mechanism_analysis(target_dir: Path, macho_files: list[Path], single
     findings: list[Finding] = []
     from core.pe_utils import extract_strings_from_bytes
 
-    # (source_path, text, is_declared_feed) — a Sparkle SUFeedURL is an
+    # (source_path, text, is_declared_feed) - a Sparkle SUFeedURL is an
     # update URL by definition; any other URL must itself look update-related.
     candidates: list[tuple[str, str, bool]] = []
     for p in macho_files:
@@ -436,7 +436,7 @@ def _update_mechanism_analysis(target_dir: Path, macho_files: list[Path], single
                     "Pass" if has_eddsa else "Warning",
                     evidence=url,
                     description="Update feed uses HTTPS." + ("" if has_eddsa else
-                        " No Sparkle EdDSA signing key (SUPublicEDKey) was found — updates may not be signature-verified."),
+                        " No Sparkle EdDSA signing key (SUPublicEDKey) was found - updates may not be signature-verified."),
                     recommendation="Configure Sparkle (or equivalent) EdDSA update signing (SUPublicEDKey) so payloads are verified before install.",
                     file_path=path_str,
                     tags=[INVENTORY_TAG] if has_eddsa else None,
@@ -573,7 +573,7 @@ def _tool_gap_findings(target_dir: Path, macho_files: list[Path]) -> list[Findin
 
 
 def _single_file_discovery(single_file: Path, macho_files: list[Path]) -> list[Finding]:
-    if not macho_files:  # not a Mach-O target — nothing macOS-specific to say
+    if not macho_files:  # not a Mach-O target - nothing macOS-specific to say
         return []
     return [_mk(
         "Application Discovery", "Single File Scope", "Info",

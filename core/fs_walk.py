@@ -23,7 +23,7 @@ TEXT_EXTENSIONS = {
     ".config", ".xml", ".json", ".ini", ".env", ".yaml", ".yml",
     ".sql", ".reg", ".txt", ".log", ".properties", ".conf", ".cfg",
     ".manifest", ".ps1", ".bat", ".cmd", ".vbs", ".js",
-    # Linux/macOS config, unit, and metadata formats (additive — does not
+    # Linux/macOS config, unit, and metadata formats (additive - does not
     # change how any Windows file is classified).
     ".toml", ".service", ".timer", ".socket", ".desktop", ".plist",
     ".entitlements", ".control", ".list", ".repo",
@@ -49,7 +49,7 @@ ALL_SCANNED_EXTENSIONS = (
 )
 
 # Well-known credential files that have no extension (or are dotfiles, whose
-# Path.suffix is empty — so ".env" itself never matched TEXT_EXTENSIONS).
+# Path.suffix is empty - so ".env" itself never matched TEXT_EXTENSIONS).
 SECRET_FILENAMES = {
     ".env", ".npmrc", ".yarnrc", ".pypirc", ".netrc", "_netrc", ".git-credentials",
     ".pgpass", ".my.cnf", ".dockercfg", ".htpasswd", ".s3cfg", ".boto",
@@ -66,7 +66,7 @@ def _is_scannable(path: Path) -> bool:
     return path.suffix.lower() in ALL_SCANNED_EXTENSIONS or is_secret_filename(path)
 
 
-# Skip these — they bloat scan time and are never config/secret sources.
+# Skip these - they bloat scan time and are never config/secret sources.
 # ".warden_cache" is Warden's own incremental cache (default location is
 # inside the target); scanning it re-reports cached evidence as new findings.
 SKIP_DIR_NAMES = {".git", "__pycache__", "node_modules", ".warden_cache"}
@@ -83,7 +83,7 @@ def iter_target_files(root: Path, single_file: Path | None = None):
 
     If `single_file` is given, scope is restricted to exactly that one path
     (still subject to the extension allowlist and size guard) instead of
-    walking `root` — this is what a "scan this one EXE" selection in the GUI
+    walking `root` - this is what a "scan this one EXE" selection in the GUI
     maps to, so picking a single file never pulls in unrelated files that
     happen to sit in the same folder.
     """
@@ -124,7 +124,7 @@ def iter_target_files(root: Path, single_file: Path | None = None):
 def find_pe_files(target_dir: Path, single_file: Path | None = None) -> list[Path]:
     """
     Return every PE file (.exe/.dll/.sys/.ocx) that is a genuine PE image
-    under `target_dir`, or — when `single_file` is given — just that one
+    under `target_dir`, or - when `single_file` is given - just that one
     file (if it is itself a valid PE).
 
     Shared by Modules 2-4 (dll_hijack, signature, re_exposure) so a single
@@ -145,7 +145,7 @@ def find_pe_files(target_dir: Path, single_file: Path | None = None) -> list[Pat
     for ext in (".exe", ".dll", ".sys", ".ocx"):
         results.extend(target_dir.rglob(f"*{ext}"))
     # rglob('**') doesn't descend into symlinked directories, but it does
-    # still match a symlinked *file* directly — exclude those for the same
+    # still match a symlinked *file* directly - exclude those for the same
     # scan-scope-escape reason as iter_target_files/iter_all_files above.
     return [p for p in results if not p.is_symlink() and is_pe_file(p)]
 
@@ -157,7 +157,7 @@ def iter_all_files(root: Path, single_file: Path | None = None):
 
     Used by the Linux/macOS modules to discover ELF/Mach-O executables and
     other artifacts (install scripts, package metadata) that commonly ship
-    without a file extension — unlike Windows PEs, which always end in
+    without a file extension - unlike Windows PEs, which always end in
     .exe/.dll/.sys/.ocx, so `iter_target_files`'s extension allowlist isn't
     a reliable way to find them.
     """
@@ -189,7 +189,7 @@ def iter_all_files(root: Path, single_file: Path | None = None):
 
 def find_elf_files(target_dir: Path, single_file: Path | None = None) -> list[Path]:
     """Return every genuine ELF file under `target_dir` (magic-byte verified),
-    regardless of extension — mirrors find_pe_files for Linux binaries."""
+    regardless of extension - mirrors find_pe_files for Linux binaries."""
     from core.binary_utils import is_elf_file
 
     results: list[Path] = []
@@ -204,7 +204,7 @@ def find_elf_files(target_dir: Path, single_file: Path | None = None) -> list[Pa
 
 def find_macho_files(target_dir: Path, single_file: Path | None = None) -> list[Path]:
     """Return every genuine Mach-O file under `target_dir` (magic-byte
-    verified), regardless of extension — mirrors find_pe_files for macOS
+    verified), regardless of extension - mirrors find_pe_files for macOS
     binaries/frameworks."""
     from core.binary_utils import is_macho_file
 
@@ -236,7 +236,7 @@ def check_permissive_permissions(path: Path) -> dict:
 
     On POSIX: flags world-writable (o+w) or world-readable-sensitive combos.
     On Windows: flags files without the read-only attribute as a weak proxy
-    signal only — real ACL analysis needs pywin32 and is noted as a gap.
+    signal only - real ACL analysis needs pywin32 and is noted as a gap.
     """
     result = {
         "world_writable": False,

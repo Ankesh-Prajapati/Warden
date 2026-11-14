@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Warden Desktop — PySide6 entry point.
+Warden Desktop - PySide6 entry point.
 
 Run with:  python desktop/main.py
 """
@@ -34,7 +34,7 @@ def _claim_windows_taskbar_identity() -> None:
     """
     Windows-only. Without this, a Python script's taskbar button/icon is
     grouped under python.exe's own identity (and shows python.exe's icon)
-    regardless of any QIcon set in-process — Qt's setWindowIcon() controls
+    regardless of any QIcon set in-process - Qt's setWindowIcon() controls
     the title bar and alt-tab thumbnail, but the taskbar button specifically
     follows the process's "App User Model ID", which defaults to the host
     interpreter's unless a script explicitly claims its own. This is a
@@ -73,7 +73,7 @@ def _install_global_exception_hook(app: QApplication) -> None:
                 "Warden hit an unexpected error and had to recover.\n\n"
                 f"{exc_value}\n\n"
                 "Details have been written to the log file "
-                "(~/.warden/logs/warden.log). The application will remain open — "
+                "(~/.warden/logs/warden.log). The application will remain open - "
                 "please save your work and restart if anything looks wrong.",
             )
         except Exception:
@@ -94,7 +94,7 @@ def main() -> int:
     # Force the Fusion style: without it, QMenuBar/QMenu on several
     # platforms partially fall back to native OS chrome for their default
     # (non-hovered) state and only honor our QSS colors for :selected/hover
-    # — which is exactly why menu text was invisible until hovered. Fusion
+    # - which is exactly why menu text was invisible until hovered. Fusion
     # is Qt's own cross-platform style that fully respects QSS everywhere,
     # so switching to it makes menu appearance consistent and correct on
     # every platform instead of being an OS-native-rendering guessing game.
@@ -104,7 +104,7 @@ def main() -> int:
     if ICON_PATH.exists():
         app.setWindowIcon(QIcon(str(ICON_PATH)))
     else:
-        logger.warning("Icon file not found at %s — using default icon.", ICON_PATH)
+        logger.warning("Icon file not found at %s - using default icon.", ICON_PATH)
 
     _install_global_exception_hook(app)
 
@@ -115,7 +115,7 @@ def main() -> int:
     app.setPalette(build_qpalette(saved_mode))
     app.setStyleSheet(set_theme(saved_mode))
 
-    # Imported after QApplication exists — some Qt widget setup wants an
+    # Imported after QApplication exists - some Qt widget setup wants an
     # active application instance in place first.
     from desktop.main_window import MainWindow
 

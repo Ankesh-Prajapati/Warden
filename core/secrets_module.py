@@ -1,5 +1,5 @@
 """
-Module 1 — Secrets & Config Exposure Scanner.
+Module 1 - Secrets & Config Exposure Scanner.
 
 Scans a target directory tree for:
   - Hardcoded secrets/credentials in text/config files (regex + entropy)
@@ -52,10 +52,10 @@ CORRELATION_KEYS = {
 # Placeholder/test values that regex rules commonly false-positive on.
 # Evidence matching these (case-insensitive) is downgraded to Low confidence
 # rather than dropped entirely, so analysts can still eyeball and dismiss.
-# Placeholder/test *values* — these mark an obviously fake credential value,
+# Placeholder/test *values* - these mark an obviously fake credential value,
 # e.g. `api_key = changeme`. Deliberately does NOT include generic words like
 # "secret" or "password", since those are normal parts of legitimate
-# variable names (client_secret, db_password, secret_key, ...) — matching
+# variable names (client_secret, db_password, secret_key, ...) - matching
 # them against the whole evidence string (as opposed to just the value)
 # used to downgrade most real credential findings to Low confidence, which
 # is the opposite of what a VAPT tool should do.
@@ -127,11 +127,11 @@ def _looks_like_placeholder(evidence: str) -> bool:
 # false positive: a credential-detection rule matching its own pattern
 # definition when scanning a rule-pack file (this tool's own rules/*.yaml,
 # or any target that happens to ship its own regex-based validators/WAF
-# rules/security tooling — not a Warden-specific edge case).
+# rules/security tooling - not a Warden-specific edge case).
 #
 # Requires >=2 distinct markers before suppressing a match, so a real
 # secret that coincidentally contains one stray bracket or backslash isn't
-# silently dropped — an actual regex pattern is a dense cluster of these,
+# silently dropped - an actual regex pattern is a dense cluster of these,
 # not one incidental character.
 _REGEX_SYNTAX_MARKERS = (
     "(?i)", "(?:", "(?=", "(?!", r"\s*", r"\s+", r"\b", r"\d+", r"\w+",
@@ -147,11 +147,11 @@ def _looks_like_regex_definition(evidence: str) -> bool:
 def _looks_like_sequential_charset(evidence: str) -> bool:
     """
     Catches charset/alphabet tables ("0123456789abcdefghijklmnopqrstuvwxyz",
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ") — a near-universal constant embedded in
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ") - a near-universal constant embedded in
     binaries for base64/base32/hex encoding tables, sorting routines, etc.
     These score as high-entropy by character *diversity* even though
     they're maximally predictable (fully sequential), which is exactly
-    the opposite of what makes a real secret high-entropy — a genuine
+    the opposite of what makes a real secret high-entropy - a genuine
     secret's high entropy comes from unpredictability, not from happening
     to use every letter once in alphabetical order.
 
@@ -174,8 +174,8 @@ def _looks_like_sequential_charset(evidence: str) -> bool:
         return forward or backward
 
     # Split into maximal same-type runs (digits vs letters) so a
-    # concatenated charset table like "0123456789abcdefg..." — digits
-    # then letters, the exact real-world case this heuristic exists for —
+    # concatenated charset table like "0123456789abcdefg..." - digits
+    # then letters, the exact real-world case this heuristic exists for -
     # is checked as two sequential runs rather than one mixed string that
     # trivially fails a single ascending-by-one check across the digit/
     # letter boundary.
@@ -192,7 +192,7 @@ def _looks_like_partitioned_charset(evidence: str) -> bool:
     """
     Catches charset tables built from a small number of contiguous
     alphabet slices concatenated together (e.g. "CDEFGHIJSTUVWXYZ" is
-    C-J plus S-Z) — a common pattern for filename-safe/ambiguity-
+    C-J plus S-Z) - a common pattern for filename-safe/ambiguity-
     avoiding encoding alphabets. Like a fully sequential run, this is a
     fixed, highly predictable constant, not a real secret, even though
     Shannon entropy alone can't tell the difference (every character
@@ -200,7 +200,7 @@ def _looks_like_partitioned_charset(evidence: str) -> bool:
 
     Deliberately conservative: requires very few breaks (<=2, i.e. at
     most 3 contiguous alphabet slices) AND each slice to be a
-    substantial run (>=4 letters) — a genuine random secret's unique
+    substantial run (>=4 letters) - a genuine random secret's unique
     letters are scattered with many small gaps, not organized into a
     couple of long contiguous chunks. An earlier, looser version of
     this check incorrectly matched real secrets (e.g. AWS/Stripe key
@@ -235,7 +235,7 @@ def _looks_like_code_identifier(evidence: str) -> bool:
     """
     Catches VB6/SQL-style function, stored-procedure, and form/control
     identifiers (e.g. "Fn_Activate_AutoMailer_ProgramId_As_MailSubject",
-    "SB_UPDATE_FCRCPTBL_FiscalReceiptNumber") — underscore-delimited,
+    "SB_UPDATE_FCRCPTBL_FiscalReceiptNumber") - underscore-delimited,
     word-like tokens that score as high-entropy from case/underscore
     mixing, but are source-code identifiers pulled from a binary's
     string table, not secrets.
@@ -267,7 +267,7 @@ def _inside_pem_block(content: str, offset: int, lookback: int = 8000) -> bool:
 
 def _looks_like_bignum_constant(candidate: str) -> bool:
     """Long uppercase-hex strings in binaries are big-number tables (elliptic
-    curve parameters, DH primes) from crypto libraries, not credentials —
+    curve parameters, DH primes) from crypto libraries, not credentials -
     generated keys/tokens are conventionally lowercase hex or base64."""
     return len(candidate) >= 48 and bool(re.fullmatch(r"[0-9A-F]+", candidate))
 
@@ -317,7 +317,7 @@ def _looks_like_symbol_name(candidate: str) -> bool:
     Random tokens switch character class every 1-2 chars and average far less.
     """
     if not _SYMBOL_CHARSET_RE.fullmatch(candidate):
-        return False  # base64 "+/=" etc. — not an identifier
+        return False  # base64 "+/=" etc. - not an identifier
     runs = _SYMBOL_RUN_RE.findall(candidate)
     return len(runs) >= 3 and sum(map(len, runs)) / len(runs) >= 3
 
@@ -333,7 +333,7 @@ _IMAGE_MAGIC_BYTES = (
 def _looks_like_embedded_image_blob(evidence: str) -> bool:
     """
     Catches base64-encoded image data (icons/toolbar bitmaps embedded as
-    resource strings in legacy VB6/MFC forms) — decodes cleanly as valid
+    resource strings in legacy VB6/MFC forms) - decodes cleanly as valid
     base64 and the decoded bytes start with a known image file magic
     number. High Shannon entropy is expected for compressed image data;
     it isn't a secret.
@@ -360,7 +360,7 @@ def _looks_like_certificate_authority_string(evidence: str) -> bool:
     """
     Catches certificate-chain/CA name fragments (e.g. embedded
     "DigiCertTrustedG4CodeSigningRSA4096SHA3842021CA1" strings from a
-    binary's own Authenticode certificate chain) — these are long,
+    binary's own Authenticode certificate chain) - these are long,
     mixed-case, numeric-heavy strings that score as high-entropy the same
     way a real secret would, but they're public certificate authority
     names, not credentials. Any signed binary embeds several of these as
@@ -498,7 +498,7 @@ def _extract_context(
     """
     Build a numbered, multi-line code-context snippet around `line_no`
     (1-indexed) so an analyst can pinpoint the finding in the actual file
-    without re-opening it — the matched line plus `radius` lines of
+    without re-opening it - the matched line plus `radius` lines of
     surrounding context above and below, each capped in width so a single
     minified/huge line doesn't blow out the report.
 
@@ -952,7 +952,7 @@ def _looks_like_sql_noise(evidence_raw: str) -> bool:
     happens because a password-assignment regex has no way to know
     where a real assignment's value ends versus unrelated text that
     happens to sit right after it in string-extracted, SQL-heavy legacy
-    code — it can only bound the value syntactically, not semantically.
+    code - it can only bound the value syntactically, not semantically.
     """
     value_match = re.search(r"[:=]\s*[\"']?([^\"']+?)[\"']?\s*$", evidence_raw)
     value = (value_match.group(1) if value_match else evidence_raw).strip()
@@ -967,7 +967,7 @@ def _looks_like_sql_noise(evidence_raw: str) -> bool:
     # ALL_CAPS or bracket-qualified continuation.
     if "." in value and re.search(r"\.[A-Z_\]]{3,}", value):
         return True
-    # Bare ALL_CAPS_WITH_UNDERSCORES identifier and nothing else — a
+    # Bare ALL_CAPS_WITH_UNDERSCORES identifier and nothing else - a
     # column/constant name, not a credential (real passwords mix case
     # or include non-alpha characters far more often than not).
     if re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", value):
@@ -998,12 +998,12 @@ def _scan_text_content(
             if rule.id == "pem-private-key" and not _has_pem_body(content, match.end()):
                 # Header constant only (e.g. OpenSSL's PEM label table:
                 # "-----BEGIN RSA PRIVATE KEY-----" then "-----END ...")
-                # — no key material follows, so nothing is exposed.
+                # - no key material follows, so nothing is exposed.
                 continue
             if _looks_like_regex_definition(evidence_raw):
                 # This match is a regex pattern literal (e.g. a rule
                 # definition inside a rules/*.yaml-style file), not an
-                # actual hardcoded credential — see _looks_like_regex_definition.
+                # actual hardcoded credential - see _looks_like_regex_definition.
                 continue
             if rule.id == "hardcoded-ip" and is_version_attribute_context(content, match.start()):
                 # Dotted-quad version numbers (PE VERSIONINFO, embedded
@@ -1030,7 +1030,7 @@ def _scan_text_content(
                 continue  # UI label / i18n string ("Show password", "Enter your password")
             if rule.id in ("generic-password-assignment", "odbc-pwd") and _looks_like_sql_noise(evidence_raw):
                 # A password/PWD= regex has no way to know where a real
-                # assignment's value ends versus adjacent unrelated text —
+                # assignment's value ends versus adjacent unrelated text -
                 # in string-extracted binary/SQL-heavy code, "PWD=" is
                 # frequently immediately followed (in the raw extracted
                 # byte stream, not in any real source construct) by the
@@ -1128,7 +1128,7 @@ def _scan_text_content(
     if enable_entropy:
         for candidate, offset in find_high_entropy_candidates(content):
             # Skip candidates already captured by a regex rule to avoid duplicate
-            # noise for the same underlying string — substring-based, not just
+            # noise for the same underlying string - substring-based, not just
             # exact-match, since a regex rule often captures the whole
             # "key=VALUE" assignment while the entropy scanner isolates just
             # the VALUE token (or vice versa), which is still the same secret.
@@ -1192,7 +1192,7 @@ def _scan_text_content(
 _TRUTHY = {"true", "1", "yes", "on", "enabled"}
 _FALSY = {"false", "0", "no", "off", "disabled", "none"}
 _VERBOSE_LOG_LEVELS = {"debug", "trace", "verbose", "all"}
-# ${VAR}, {{ var }}, %VAR%, $VAR, <placeholder> — references, not values.
+# ${VAR}, {{ var }}, %VAR%, $VAR, <placeholder> - references, not values.
 _REFERENCE_VALUE_RE = re.compile(r"^(?:\$\{[^}]*\}|\{\{.*\}\}|%[A-Za-z_][\w]*%|\$[A-Za-z_]\w*|<[^>]*>)$")
 
 
@@ -1200,7 +1200,7 @@ def _config_value_finding(setting: dict, covered_evidence: list[str]) -> tuple[S
     """Decide whether a parsed config setting is worth reporting.
 
     The key name alone ("password_min_length", "token_lifetime") says
-    nothing — the value decides. Returns (severity, reason) or None."""
+    nothing - the value decides. Returns (severity, reason) or None."""
     tags = setting["tags"]
     raw = setting["value"]
     text = str(raw).strip().strip("'\"")
@@ -1310,7 +1310,7 @@ def _scan_pe_strings(
     # A build/product version number ("6.0.0.0", "19.0.3.0") is
     # structurally identical to a dotted-quad IPv4 address, and PE
     # binaries always embed their own version as a plain string somewhere
-    # — this is the single most common false positive for the
+    # - this is the single most common false positive for the
     # hardcoded-ip rule. Drop any match that exactly equals a version
     # string this specific binary actually declares in its own
     # VERSIONINFO resource, rather than guessing from the digits alone.
@@ -1430,7 +1430,7 @@ def run(
         progress_callback: optional callable(file_path: str) invoked per file,
             for CLI progress reporting.
         error_callback: optional callable(message: str) invoked when a single
-            file fails to scan (corrupt/unreadable/unexpected format) — the
+            file fails to scan (corrupt/unreadable/unexpected format) - the
             file is skipped and the scan continues rather than aborting the
             whole module and losing every finding already collected.
     """

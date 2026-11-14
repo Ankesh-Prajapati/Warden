@@ -1,7 +1,7 @@
 """SHA-256 backed scan cache for incremental module runs.
 
 An unchanged file is not re-analyzed, but its findings from the previous
-run are restored from the cache — skipping a file must never make its
+run are restored from the cache - skipping a file must never make its
 findings disappear from the report.
 """
 from __future__ import annotations

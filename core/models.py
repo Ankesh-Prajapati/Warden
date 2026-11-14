@@ -72,7 +72,7 @@ class Finding:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Finding":
-        """Inverse of to_dict() — used to restore cached findings."""
+        """Inverse of to_dict() - used to restore cached findings."""
         return cls(
             module=d["module"],
             rule_id=d["rule_id"],

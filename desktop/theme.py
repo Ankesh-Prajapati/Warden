@@ -1,7 +1,7 @@
 """
 Visual theme for the Warden desktop app.
 
-Two Qt stylesheets (QSS) — dark (default) and light — built from named
+Two Qt stylesheets (QSS) - dark (default) and light - built from named
 palettes, plus the palette constants other widgets (e.g. the findings
 table's severity colors) pull from so everything stays visually
 consistent in one place. Switching themes at runtime re-renders the QSS
@@ -44,7 +44,7 @@ DARK_PALETTE = {
     "SCROLLBAR_HANDLE_HOVER": "#454952",
 }
 
-# A light enterprise palette — not simply DARK_PALETTE with colors flipped,
+# A light enterprise palette - not simply DARK_PALETTE with colors flipped,
 # since a naive invert produces washed-out, low-contrast UI chrome. Accent
 # is deepened for AA contrast against white, and severity colors are
 # individually darkened/saturated where the dark-theme value (tuned for a
@@ -520,7 +520,7 @@ QToolTip {{
 
 
 def get_palette(mode: str | None = None) -> dict:
-    """Returns the active palette dict (current theme if mode is omitted) —
+    """Returns the active palette dict (current theme if mode is omitted) -
     lets other widgets (scan log, status labels) pull live colors instead
     of hardcoding dark-theme-only hex values that break under the light
     theme."""
@@ -590,8 +590,8 @@ def set_theme(mode: str) -> str:
     Switch the active theme at runtime. Mutates the module-level QSS and
     SEVERITY_COLORS *in place* (rather than rebinding the names) so
     existing `from desktop.theme import SEVERITY_COLORS` references in
-    finding_dialog.py/main_window.py — which bind to this dict object at
-    import time — automatically see the new colors without every call
+    finding_dialog.py/main_window.py - which bind to this dict object at
+    import time - automatically see the new colors without every call
     site needing to be theme-aware itself. Returns the new QSS string for
     the caller to apply via QApplication.setStyleSheet().
     """

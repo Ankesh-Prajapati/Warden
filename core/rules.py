@@ -38,7 +38,7 @@ def load_rules_from_file(path: Path, warn=None) -> list[Rule]:
     """Load and compile rules from a single YAML rule-pack file.
 
     `warn`, if given, is called with each non-fatal warning message instead
-    of printing to stdout — needed so rule-load problems (bad regex,
+    of printing to stdout - needed so rule-load problems (bad regex,
     duplicate ids) actually surface in the GUI log / CLI output instead of
     vanishing into a background thread's stdout that nobody sees.
     """

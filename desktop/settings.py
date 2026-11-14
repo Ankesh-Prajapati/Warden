@@ -93,7 +93,7 @@ class WardenSettings:
 
     @property
     def vt_api_key(self) -> str:
-        # Stored via QSettings same as everything else here — this means
+        # Stored via QSettings same as everything else here - this means
         # plaintext in the registry (Windows) / plist (macOS) / config file
         # (Linux), the same place any desktop app's "remember this API key"
         # feature would put it. Flagged in the UI label next to the input

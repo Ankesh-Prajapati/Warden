@@ -3,7 +3,7 @@ VirusTotal integration for binary reputation checks.
 
 Design principle: **hash lookup only, by default.** During a VAPT
 engagement the binaries being scanned are frequently a client's
-proprietary, unreleased software under NDA — silently uploading them to
+proprietary, unreleased software under NDA - silently uploading them to
 a third-party public service would be a serious confidentiality/contract
 breach, independent of whether it's also a security concern. So the
 default and recommended mode only ever sends a SHA-256 hash to
@@ -13,11 +13,11 @@ itself ever leaving the analyst's machine.
 
 Uploading unknown files for fresh analysis is supported but is a
 separate, explicitly opt-in action (`upload_unknown=True`) that the
-caller must deliberately choose per scan — see reputation_module.py.
+caller must deliberately choose per scan - see reputation_module.py.
 
 Works against the VirusTotal public (free) API tier: 4 requests/minute,
 500/day, 15.5K/month. Paid tiers lift those limits but nothing about the
-request shape changes — same client works for API key of either tier.
+request shape changes - same client works for API key of either tier.
 """
 from __future__ import annotations
 
@@ -107,18 +107,18 @@ class VTClient:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             if e.code == 404:
-                return {}  # not found in VT's database — not an error condition
+                return {}  # not found in VT's database - not an error condition
             if e.code == 401 or e.code == 403:
                 raise VTAuthError(f"VirusTotal rejected the API key (HTTP {e.code}).") from e
             if e.code == 429:
-                raise VTRateLimitError("VirusTotal rate limit exceeded — slow down or upgrade your API tier.") from e
+                raise VTRateLimitError("VirusTotal rate limit exceeded - slow down or upgrade your API tier.") from e
             raise
         except urllib.error.URLError as e:
             raise ConnectionError(f"Could not reach VirusTotal: {e.reason}") from e
 
     def lookup_hash(self, sha256: str) -> VTVerdict:
         """
-        Look up a file by its SHA-256 hash only. Never uploads file content —
+        Look up a file by its SHA-256 hash only. Never uploads file content -
         this is the safe, confidentiality-preserving default described above.
         """
         verdict = VTVerdict(sha256=sha256)
@@ -161,7 +161,7 @@ class VTClient:
         """
         Explicitly opt-in: upload file content for fresh analysis when it
         isn't already known to VT. NOT called by default anywhere in
-        Warden — see the module docstring for why. Only wire this in behind
+        Warden - see the module docstring for why. Only wire this in behind
         a UI control that makes the confidentiality tradeoff obvious.
         """
         import mimetypes
@@ -202,7 +202,7 @@ class VTClient:
         return self.lookup_hash(sha256)
 
 
-# SHA-256 of the EICAR antivirus test string — a standard, harmless test
+# SHA-256 of the EICAR antivirus test string - a standard, harmless test
 # file that every AV engine recognizes and every VT account has permission
 # to look up. Used purely to verify a key/connection work, not as a real
 # malware indicator. Computed directly from the EICAR test string bytes
@@ -216,7 +216,7 @@ def test_api_key(api_key: str) -> tuple[bool, str]:
     Quick standalone check: does this API key actually work? Returns
     (ok, message). Distinguishes an invalid/unverified key from a network
     problem, so the caller can show something more useful than a bare
-    'it failed' — this is exactly the ambiguity that made an earlier key
+    'it failed' - this is exactly the ambiguity that made an earlier key
     look broken when the real cause was a blocked network path.
     """
     try:
@@ -228,8 +228,8 @@ def test_api_key(api_key: str) -> tuple[bool, str]:
     if verdict.error:
         return False, verdict.error
     if verdict.found:
-        return True, f"Key works — VirusTotal reachable, {verdict.total_engines} engines reporting."
+        return True, f"Key works - VirusTotal reachable, {verdict.total_engines} engines reporting."
     # Not finding the EICAR hash would be extremely unusual (it's one of
     # the most-submitted files in VT's history) but isn't itself a key
-    # failure — the connection and auth both clearly worked to get here.
-    return True, "Key works — VirusTotal reachable, though the test lookup returned no data."
+    # failure - the connection and auth both clearly worked to get here.
+    return True, "Key works - VirusTotal reachable, though the test lookup returned no data."

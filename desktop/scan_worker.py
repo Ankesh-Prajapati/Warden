@@ -3,7 +3,7 @@ Background scan worker for the Warden desktop app.
 
 Runs core.scanner.run_scan() on a QThread so the UI stays responsive
 during long scans, and defensively catches every exception so a scan
-failure surfaces as a signal the UI can display — it can never crash the
+failure surfaces as a signal the UI can display - it can never crash the
 application outright.
 """
 from __future__ import annotations
@@ -115,7 +115,7 @@ class ScanWorker(QObject):
 
         if result.module_errors:
             self.log_line.emit(
-                f"{len(result.module_errors)} note(s) logged during the scan (see log above) — "
+                f"{len(result.module_errors)} note(s) logged during the scan (see log above) - "
                 f"not necessarily failures, findings collected are still valid.",
                 "dim",
             )

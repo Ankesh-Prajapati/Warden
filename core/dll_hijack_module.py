@@ -1,5 +1,5 @@
 """
-Module 2 — DLL Hijacking Detection (static analysis).
+Module 2 - DLL Hijacking Detection (static analysis).
 
 Covers, per the project spec:
   - PE import table enumeration (which DLLs each binary depends on)
@@ -13,7 +13,7 @@ Covers, per the project spec:
   - Unquoted service path issues in Windows service binPaths (same
     vulnerability class, cheap to check via .reg exports or a services-file)
 
-Static analysis only — no runtime loader tracing, no actual hijack payloads.
+Static analysis only - no runtime loader tracing, no actual hijack payloads.
 """
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ def _build_local_dll_inventory(target_dir: Path, single_file: Path | None = None
     """Lowercased filenames of every DLL physically present under target_dir.
 
     When `single_file` is set (a single-EXE scan), this is scoped to just
-    that file's own directory (non-recursive) rather than the whole tree —
+    that file's own directory (non-recursive) rather than the whole tree -
     enough to check for sibling DLLs relevant to that one binary's hijack
     surface, without pulling unrelated files into the analysis."""
     if single_file is not None:
@@ -124,7 +124,7 @@ def parse_services_from_reg_text(text: str, source_name: str) -> list[ServiceEnt
 
     ImagePath is usually REG_EXPAND_SZ, which regedit exports as
     `"ImagePath"=hex(2):43,00,3a,00,...` (UTF-16LE bytes, wrapped across
-    lines with a trailing backslash) — those must be decoded, not read as
+    lines with a trailing backslash) - those must be decoded, not read as
     text. REG_SZ values escape quotes, e.g. `"\\"C:\\\\Program Files\\\\x.exe\\""`.
     """
     entries: list[ServiceEntry] = []
@@ -192,7 +192,7 @@ def _collect_service_entries(
 ) -> list[ServiceEntry]:
     entries: list[ServiceEntry] = []
 
-    # In single-EXE scope, there's no folder tree to pull .reg exports from —
+    # In single-EXE scope, there's no folder tree to pull .reg exports from -
     # only the optional explicit services_file (if provided) applies.
     reg_candidates = [] if single_file is not None else [
         p for p in target_dir.rglob("*.reg") if not p.is_symlink()
@@ -238,7 +238,7 @@ def _service_path_findings(entries: list[ServiceEntry]) -> list[Finding]:
                 Finding(
                     module="dll_hijack",
                     rule_id="unquoted-service-path",
-                    title=f"Unquoted service path — {entry.name}",
+                    title=f"Unquoted service path - {entry.name}",
                     severity=Severity.HIGH,
                     file_path=entry.source,
                     evidence=entry.image_path,
@@ -386,7 +386,7 @@ def _phantom_dll_findings(
         ):
             is_known_system = True
         if is_known_system or lname in local_dll_inventory:
-            continue  # resolves locally or is a known system DLL — not phantom (writable-dir risk covered separately)
+            continue  # resolves locally or is a known system DLL - not phantom (writable-dir risk covered separately)
 
         findings.append(
             Finding(

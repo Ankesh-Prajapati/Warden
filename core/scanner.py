@@ -32,7 +32,7 @@ class ScanCancelled(BaseException):
 
     Deliberately a BaseException: every module guards per-file work with
     `except Exception` so one bad file can't kill a scan, and a regular
-    Exception would be swallowed there — turning "cancel" into "this module
+    Exception would be swallowed there - turning "cancel" into "this module
     failed" while the scan carried on."""
 
 
@@ -64,7 +64,7 @@ class ScanResult:
         self.inventory = inventory or []
         # Non-fatal problems encountered during the scan (a module crashed,
         # a file was unreadable, etc). The scan still completes and returns
-        # every finding collected up to that point — this list is purely
+        # every finding collected up to that point - this list is purely
         # for analyst visibility / audit trail, never for aborting the run.
         self.module_errors = module_errors or []
 
@@ -185,13 +185,13 @@ def run_scan(
         target_dir tree. This is what a "select a single EXE" scan maps to.
     extract_archives: if True (default), installer/archive-looking files
         (NSIS/InnoSetup/MSI/self-extracting installers, ZIP/CAB/7z, and
-        plain PEs that happen to carry a nested archive in a resource —
+        plain PEs that happen to carry a nested archive in a resource -
         a real case found during development: a signed installer whose
         PE resources contained a Cabinet archive with five bundled DLLs,
         invisible to every other module) are unpacked with the system
         `7z` binary and their contents scanned too, recursively up to
         archive_max_depth levels. Silently does nothing if `7z` isn't on
-        PATH — never a hard failure. Findings from extracted content
+        PATH - never a hard failure. Findings from extracted content
         carry extra["extracted_from"] noting the original archive.
     """
     if modules is None:

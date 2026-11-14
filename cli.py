@@ -40,10 +40,10 @@ def cli():
 @click.option("--module", "modules", multiple=True, default=None, help="Modules to run (default: secrets). Repeatable. Options: secrets, dll_hijack, signature, re_exposure, linux, macos, reputation")
 @click.option("--services-file", default=None, type=click.Path(exists=True, dir_okay=False), help="Optional text file with 'sc query'/'wmic service' output for unquoted-path checks (Module 2).")
 @click.option("--no-osslsigncode", is_flag=True, help="Skip shelling out to osslsigncode for full signature verification (Module 3 structural checks still run).")
-@click.option("--vt-api-key", default=None, envvar="VT_API_KEY", help="VirusTotal API key for the 'reputation' module. Can also be set via the VT_API_KEY env var. Only a SHA-256 hash is ever sent — see --vt-upload-unknown.")
+@click.option("--vt-api-key", default=None, envvar="VT_API_KEY", help="VirusTotal API key for the 'reputation' module. Can also be set via the VT_API_KEY env var. Only a SHA-256 hash is ever sent - see --vt-upload-unknown.")
 @click.option("--vt-include-clean", is_flag=True, help="Also emit an Info finding for binaries VirusTotal has seen and NOT flagged (default: only flagged binaries are reported).")
 @click.option("--vt-max-lookups", default=15, show_default=True, help="Cap on binaries checked per scan, to stay within VirusTotal rate/quota limits. At ~15s/lookup on the free tier, this is the main lever on how much time the reputation module adds to a scan.")
-@click.option("--vt-upload-unknown", is_flag=True, help="DANGER: if a binary's hash isn't already known to VirusTotal, upload the file itself for analysis. Off by default — uploading proprietary/client binaries to a third party may violate engagement confidentiality. Only enable this if you've confirmed it's acceptable for this target.")
+@click.option("--vt-upload-unknown", is_flag=True, help="DANGER: if a binary's hash isn't already known to VirusTotal, upload the file itself for analysis. Off by default - uploading proprietary/client binaries to a third party may violate engagement confidentiality. Only enable this if you've confirmed it's acceptable for this target.")
 @click.option("--incremental", is_flag=True, help="Use the SHA-256 scan cache and skip unchanged files where supported.")
 @click.option("--cache-file", default=None, type=click.Path(dir_okay=False), help="Override the incremental scan cache file.")
 @click.option("--yara-rules-dir", default=None, type=click.Path(exists=True, file_okay=False), help="Custom YARA rules directory for reverse-engineering scans.")
@@ -83,7 +83,7 @@ def scan(target, output, json_output, rules_dir, no_entropy, no_pe_strings, modu
 
     if "reputation" in selected_modules and vt_upload_unknown:
         console.print(
-            "[bold yellow]Warning:[/bold yellow] --vt-upload-unknown is set — binaries not already "
+            "[bold yellow]Warning:[/bold yellow] --vt-upload-unknown is set - binaries not already "
             "known to VirusTotal will be uploaded there. Make sure that's acceptable for this target "
             "before continuing."
         )
